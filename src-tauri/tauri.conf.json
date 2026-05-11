@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri2-schema/main/schema.json",
   "productName": "ClaudeCode Proxy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.claudecode.proxy",
   "build": {
     "beforeDevCommand": "",
@@ -45,9 +45,6 @@
         "https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json"
       ]
     },
-    "autostart": {
-      "enabled": true,
-      "hidden": true
-    }
+    "autostart": true
   }
 }
