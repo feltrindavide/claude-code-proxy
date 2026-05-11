@@ -5,7 +5,7 @@ import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
-import { Check, X } from 'lucide-react';
+import { Eye, EyeOff, Check, X } from 'lucide-react';
 
 interface ProviderFormProps {
   provider?: { name: string; baseUrl: string; enabled: boolean; priority: number; providerType?: string } | null;
@@ -27,9 +27,8 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const [name, setName] = useState(provider?.name || '');
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || '');
   const [apiKey, setApiKey] = useState(provider ? '••••••••' : '');
-  const [providerType, setProviderType] = useState(provider?.providerType || 'OpenRouter');
-  const [enabled, setEnabled] = useState(provider?.enabled ?? true);
-  const [priority, setPriority] = useState(provider?.priority ?? 1);
+  const [providerType, setProviderType] = useState(provider?.providerType || 'Custom');
+  const [showKey, setShowKey] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
@@ -134,19 +133,37 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
       />
 
       {providerType !== 'Ollama' && (
-        <Input
-          label="API Key"
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          error={errors.apiKey}
-          placeholder={provider ? 'Leave blank to keep existing key' : 'Enter your API key'}
-        />
-      )}
-      {provider && providerType !== 'Ollama' && apiKey === '••••••••' && (
-        <p className="text-small text-muted -mt-xs">
-          🔒 API key is stored securely in Keychain — leave as-is to keep current key
-        </p>
+        <div className="space-y-xs">
+          <label className="block text-sm text-body">API Key</label>
+          <div className="relative">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={provider ? 'Leave blank to keep existing key' : 'Enter your API key'}
+              className="w-full bg-surface-card text-ink border border-hairline rounded-md text-body focus-ring h-11 px-4 pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey(!showKey)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink focus-ring"
+              aria-label={showKey ? 'Hide API key' : 'Show API key'}
+            >
+              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+          {errors.apiKey && <p className="text-small text-semantic-error">{errors.apiKey}</p>}
+          {provider && !showKey && (
+            <p className="text-small text-muted -mt-xs">
+              🔒 Stored in Keychain — leave as-is to keep, or type a new key to replace
+            </p>
+          )}
+          {provider && showKey && (
+            <p className="text-small text-muted -mt-xs">
+              Showing masked key for security. Type a new value to replace it.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="flex items-center gap-md">
