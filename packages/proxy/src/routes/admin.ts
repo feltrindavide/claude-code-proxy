@@ -15,7 +15,7 @@
 
 import { Router } from 'express';
 import { configService } from '../services/config.js';
-import { keychainService } from '../services/keychain.js';
+import { setKey, getKey, hasKey, deleteKey } from '../services/keychain.js';
 import { providerService } from '../services/provider.js';
 import { providerValidatorService } from '../services/provider-validator.js';
 import { requestLogService } from '../services/requestLog.js';
@@ -95,12 +95,12 @@ router.get('/providers', async (req, res) => {
     
     // For each provider, mask the key for display
     const masked = await Promise.all(providers.map(async (p) => {
-      const hasKey = await keychainService.hasKey(p.name);
+      const keyExists = await hasKey(p.name);
       return {
         name: p.name,
         baseUrl: p.baseUrl,
         keyId: p.keyId,
-        keyMask: hasKey ? '••••' : null, // AUTH-03: masked display
+        keyMask: keyExists ? '••••' : null, // AUTH-03: masked display
         models: p.models,
         enabled: p.enabled,
         priority: p.priority,
@@ -131,7 +131,7 @@ router.post('/providers', async (req, res) => {
     
     // Store actual key in Keychain (D-08, D-09)
     if (apiKey) {
-      await keychainService.setKey(name, apiKey);
+      await setKey(name, apiKey);
     }
     
     // Register provider (keyId stored in config, not actual key per D-14)
@@ -209,7 +209,7 @@ router.delete('/providers/:id', async (req, res) => {
     const { id } = req.params;
 
     // Delete Keychain entry
-    await keychainService.deleteKey(id);
+    await deleteKey(id);
 
     // Delete from provider registry
     providerService.deleteProvider(id);

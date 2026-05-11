@@ -18,7 +18,7 @@ import type { Request, Response } from 'express';
 import type { RouteResolution } from './types/index.js';
 import { getOrCreateAdapter } from './adapters/index.js';
 import { providerService } from './services/provider.js';
-import { keychainService } from './services/keychain.js';
+import { getKey } from './services/keychain.js';
 import { getUserFacingErrorMessage } from './services/sse-transformer.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 
@@ -104,7 +104,7 @@ export async function handleProxyRequest(
   };
 
   // 3. Get API key from Keychain
-  const apiKey = await keychainService.getKey(resolution.provider.name);
+  const apiKey = await getKey(resolution.provider.name);
   if (!apiKey) {
     return emitAnthropicError(
       res,

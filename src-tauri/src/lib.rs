@@ -7,6 +7,41 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt as AutoStart;
 
+/// Find the user's node binary. Checks common locations.
+fn find_node() -> String {
+    // Common nvm paths (most common for dev setups)
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = vec![
+        format!("{}/.nvm/versions/node/*/bin/node", home),
+        "/opt/homebrew/bin/node".to_string(),
+        "/usr/local/bin/node".to_string(),
+        "/usr/bin/node".to_string(),
+        "node".to_string(), // fallback to PATH
+    ];
+
+    for candidate in &candidates {
+        if candidate.contains('*') {
+            // Expand glob for nvm versions
+            if let Ok(entries) = std::fs::read_dir(format!("{}/.nvm/versions/node", home)) {
+                let mut versions: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.path().join("bin/node").to_string_lossy().to_string())
+                    .collect();
+                versions.sort();
+                if let Some(latest) = versions.last() {
+                    return latest.clone();
+                }
+            }
+        } else {
+            if std::path::Path::new(candidate).exists() {
+                return candidate.clone();
+            }
+        }
+    }
+    "node".to_string()
+}
+
 /// Global state to track the proxy child process PID
 struct ProxyState {
     pid: Mutex<Option<u32>>,
@@ -35,16 +70,46 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
     // Try bundled proxy (production)
     let resource_dir = app.path().resource_dir()
         .map_err(|_| "Cannot find resource directory".to_string())?;
-    let bundled = resource_dir.join("proxy-bundle/dist/index.js");
+    let bundled = resource_dir.join("proxy-bundle/dist/index.cjs");
 
     if bundled.exists() {
-        let mut cmd = Command::new("node");
+        // Kill any existing process on port 3456
+        let _ = Command::new("sh")
+            .args(["-c", "lsof -ti :3456 2>/dev/null | xargs kill -9 2>/dev/null"])
+            .output();
+
+        // Find node binary: prefer user's node, fall back to PATH
+        let node_path = find_node();
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let full_path = if current_path.is_empty() {
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+        } else {
+            current_path
+        };
+
+        let mut cmd = Command::new(&node_path);
         cmd.arg(&bundled);
         cmd.env("NODE_ENV", "production");
+        cmd.env("PATH", &full_path);
+        cmd.current_dir(resource_dir.join("proxy-bundle"));
+        // Capture stderr for debugging
+        cmd.stderr(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
         cmd.current_dir(resource_dir.join("proxy-bundle"));
         match cmd.spawn() {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id();
+                // Log stderr in background
+                if let Some(stderr) = child.stderr.take() {
+                    std::thread::spawn(move || {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::BufReader::new(stderr).read_to_string(&mut buf).ok();
+                        if !buf.is_empty() {
+                            eprintln!("[Proxy stderr]\n{}", buf);
+                        }
+                    });
+                }
                 *pid_lock = Some(pid);
                 return Ok(pid);
             }

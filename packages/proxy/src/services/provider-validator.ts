@@ -10,7 +10,7 @@
 
 import type { ValidationResult } from '../adapters/interface.js';
 import { getAdapter } from '../adapters/index.js';
-import { keychainService } from './keychain.js';
+import { getKey } from './keychain.js';
 import { providerService } from './provider.js';
 
 /**
@@ -42,7 +42,7 @@ export class ProviderValidatorService {
 
     // Retrieve API key from Keychain
     // Some providers (Ollama) don't need API keys — validate without one
-    const apiKey = await keychainService.getKey(name);
+    const apiKey = await getKey(name);
     if (!apiKey) {
       // Try validating without API key — adapter may support it (e.g., Ollama)
       const result = await adapter.validate(baseUrl, '').catch(() => ({
