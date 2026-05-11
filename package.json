@@ -1,0 +1,31 @@
+{
+  "name": "claudecode-proxy-app",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "lsof -ti :3456 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :3457 2>/dev/null | xargs kill -9 2>/dev/null; concurrently -n proxy,web -c cyan,green \"cd packages/proxy && npx tsx src/index.ts\" \"cd apps/web && npx next dev --port 3457\"",
+    "dev:app": "lsof -ti :3456 2>/dev/null | xargs kill -9 2>/dev/null; lsof -ti :3457 2>/dev/null | xargs kill -9 2>/dev/null; concurrently -n proxy,web,app -c cyan,green,magenta \"cd packages/proxy && npx tsx src/index.ts\" \"cd apps/web && npx next dev --port 3457\" \"npm run tauri dev\"",
+    "build": "npm run build --workspace=apps/web",
+    "tauri": "tauri",
+    "proxy:build": "cd packages/proxy && npm run build",
+    "proxy:start": "cd packages/proxy && node dist/index.js",
+    "test:e2e": "npx playwright test --config=e2e/playwright.config.ts --project=chromium",
+    "test:e2e:smoke": "npx playwright test --config=e2e/playwright.config.ts --project=chromium --grep \"@smoke\"",
+    "test:e2e:ui": "npx playwright test --config=e2e/playwright.config.ts --project=chromium --ui",
+    "setup": "npx tsx scripts/setup.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "concurrently": "^9.2.1",
+    "playwright": "^1.59.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.0"
+  }
+}

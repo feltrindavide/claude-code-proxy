@@ -1,0 +1,3 @@
+apps/web/.next/
+node_modules/
+src-tauri/target/

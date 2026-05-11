@@ -1,0 +1,24 @@
+{
+  "name": "@claude-code-proxy/cli",
+  "version": "0.1.0",
+  "description": "CLI for Claude Code proxy setup and management",
+  "type": "module",
+  "bin": {
+    "claude-code-proxy": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node --loader tsx src/index.ts",
+    "dev": "node --loader tsx src/index.ts"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

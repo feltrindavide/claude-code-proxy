@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri2-schema/main/schema.json",
+  "productName": "ClaudeCode Proxy",
+  "version": "0.1.0",
+  "identifier": "com.claudecode.proxy",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../apps/web/out",
+    "devUrl": "http://localhost:3457"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "ClaudeCode Proxy",
+        "label": "popup",
+        "url": "/popup",
+        "width": 350,
+        "height": 330,
+        "visible": false,
+        "center": false,
+        "resizable": false,
+        "decorations": false,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/icon.png"],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdCODk1QkM1NzQ0M0RDRTIKUldUaTNFTjB4VnVKZTYyUzlkak52TEs4MkhZTStQTkRSeVM2VGNQRTFXNlRBa0VEeHF4TDNGT2oK",
+      "endpoints": [
+        "https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json"
+      ]
+    },
+    "autostart": {
+      "enabled": true,
+      "hidden": true
+    }
+  }
+}

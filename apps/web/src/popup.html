@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=320">
+  <title>ClaudeCode Proxy</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: rgba(30, 30, 32, 0.96);
+      color: #e8e8e8;
+      width: 320px;
+      min-height: 200px;
+      border-radius: 12px;
+      overflow: hidden;
+      user-select: none;
+    }
+    .container { padding: 16px; }
+    .header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+    }
+    .logo {
+      width: 24px; height: 24px; border-radius: 6px;
+      background: #f54e00; display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 14px; color: white;
+    }
+    .title { font-size: 14px; font-weight: 600; flex: 1; }
+    .status-badge {
+      font-size: 11px; padding: 3px 8px; border-radius: 20px;
+      font-weight: 500;
+    }
+    .running { background: rgba(52, 199, 89, 0.2); color: #34c759; }
+    .stopped { background: rgba(142, 142, 147, 0.2); color: #8e8e93; }
+    .error { background: rgba(255, 69, 58, 0.2); color: #ff453a; }
+    .loading { background: rgba(255, 159, 10, 0.2); color: #ff9f0a; }
+    .info-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px;
+    }
+    .info-item {
+      background: rgba(255,255,255,0.05); border-radius: 8px; padding: 10px;
+    }
+    .info-label { font-size: 10px; color: #8e8e93; text-transform: uppercase; letter-spacing: 0.5px; }
+    .info-value { font-size: 13px; font-weight: 500; margin-top: 2px; font-family: monospace; }
+    .btn {
+      display: block; width: 100%; padding: 10px; border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity 0.15s;
+      text-align: center; margin-bottom: 6px;
+    }
+    .btn:hover { opacity: 0.8; }
+    .btn-primary { background: #f54e00; color: white; }
+    .btn-secondary { background: rgba(255,255,255,0.08); color: #e8e8e8; }
+    .btn-danger { background: rgba(255,69,58,0.15); color: #ff453a; }
+    .btn:disabled { opacity: 0.4; cursor: default; }
+    .footer { text-align: center; font-size: 10px; color: #636366; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">C</div>
+      <span class="title">ClaudeCode Proxy</span>
+      <span class="status-badge" id="statusBadge">Loading...</span>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-item">
+        <div class="info-label">Port</div>
+        <div class="info-value" id="port">3456</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Providers</div>
+        <div class="info-value" id="providers">—</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Version</div>
+        <div class="info-value" id="version">—</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">Uptime</div>
+        <div class="info-value" id="uptime">—</div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" id="toggleBtn" onclick="toggleProxy()">Start Proxy</button>
+    <button class="btn btn-secondary" onclick="openDashboard()">Open Dashboard</button>
+
+    <div class="footer">Click outside to close</div>
+  </div>
+
+  <script>
+    let status = 'stopped';
+    const API = 'http://localhost:3456';
+
+    async function refresh() {
+      try {
+        const health = await fetch(API + '/health').then(r => r.json());
+        const providers = await fetch(API + '/admin/providers').then(r => r.json());
+        updateStatus('running', health, providers.length);
+      } catch {
+        updateStatus('stopped');
+      }
+    }
+
+    function updateStatus(state, health, providerCount) {
+      status = state;
+      const badge = document.getElementById('statusBadge');
+      badge.textContent = state === 'running' ? 'Running' : state === 'loading' ? 'Starting...' : 'Stopped';
+      badge.className = 'status-badge ' + state;
+      const btn = document.getElementById('toggleBtn');
+      btn.textContent = state === 'running' ? 'Stop Proxy' : 'Start Proxy';
+      btn.className = 'btn ' + (state === 'running' ? 'btn-danger' : 'btn-primary');
+      if (health) {
+        document.getElementById('port').textContent = health.port || '3456';
+        document.getElementById('version').textContent = health.version || '—';
+        document.getElementById('providers').textContent = providerCount || '0';
+        const uptime = document.getElementById('uptime');
+        if (state === 'running') {
+          if (!uptime._start) uptime._start = Date.now();
+          uptime.textContent = Math.floor((Date.now() - uptime._start) / 1000) + 's';
+        } else {
+          uptime.textContent = '—';
+          uptime._start = null;
+        }
+      }
+    }
+
+    async function toggleProxy() {
+      if (status === 'running') {
+        updateStatus('loading');
+        try { await fetch(API + '/admin/proxy/stop', { method: 'POST' }); } catch {}
+        refresh();
+      } else {
+        updateStatus('loading');
+        try { await fetch(API + '/admin/proxy/start', { method: 'POST' }); } catch {}
+        setTimeout(refresh, 2000);
+      }
+    }
+
+    function openDashboard() {
+      window.open('http://localhost:3457', '_blank');
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
