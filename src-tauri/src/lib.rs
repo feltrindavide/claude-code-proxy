@@ -5,6 +5,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
+use tauri_plugin_autostart::ManagerExt as AutoStart;
 
 /// Global state to track the proxy child process PID
 struct ProxyState {
@@ -37,20 +38,13 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
 
-    // Try node dist/index.js first (production), fall back to npx tsx (dev)
-    let mut cmd = Command::new("node");
-    cmd.args(["packages/proxy/dist/index.js"]);
+    // Try npx tsx (works in both dev and production if Node.js is installed)
+    let mut cmd = Command::new("npx");
+    cmd.args(["tsx", "packages/proxy/src/index.ts"]);
     cmd.current_dir(&app_dir);
     cmd.env("NODE_ENV", "production");
 
-    let child = cmd.spawn().or_else(|_| {
-        // Fallback: try npx tsx
-        let mut fallback = Command::new("npx");
-        fallback.args(["tsx", "packages/proxy/src/index.ts"]);
-        fallback.current_dir(&app_dir);
-        fallback.env("NODE_ENV", "production");
-        fallback.spawn()
-    }).map_err(|e| format!("Failed to start proxy: {}", e))?;
+    let child = cmd.spawn().map_err(|e| format!("Failed to start proxy: {}. Make sure Node.js and tsx are installed.", e))?;
 
     let pid = child.id();
     *pid_lock = Some(pid);
@@ -140,6 +134,10 @@ pub fn run() {
                 println!("[Proxy] Proxy started on port 3456");
             }
 
+            // Enable autostart on first launch
+            let autostart = handle.autolaunch();
+            let _ = autostart.enable();
+
             // Build tray menu
             let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>).unwrap();
             let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q")).unwrap();
@@ -153,6 +151,7 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ClaudeCode Proxy")
                 .menu(&menu)
+                .show_menu_on_left_click(false)
                 .on_menu_event(move |_app, event| {
                     match event.id().as_ref() {
                         "dashboard" => {

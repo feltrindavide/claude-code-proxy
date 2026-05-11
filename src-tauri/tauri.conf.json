@@ -44,7 +44,6 @@
       "endpoints": [
         "https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json"
       ]
-    },
-    "autostart": true
+    }
   }
 }
