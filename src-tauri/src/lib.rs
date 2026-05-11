@@ -27,28 +27,38 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
     let state = app.state::<ProxyState>();
     let mut pid_lock = state.pid.lock().map_err(|e| e.to_string())?;
 
-    // Kill existing proxy if any
     if let Some(existing_pid) = *pid_lock {
         let _ = Command::new("kill").arg(existing_pid.to_string()).output();
         *pid_lock = None;
     }
 
-    let app_dir = app.path()
-        .resource_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    // Try project directory (dev mode)
+    let cwd = std::env::current_dir().ok();
+    let paths = &[
+        cwd.as_ref().map(|d| d.join("packages/proxy/src/index.ts")),
+        Some(std::path::PathBuf::from("packages/proxy/src/index.ts")),
+    ];
 
-    // Try npx tsx (works in both dev and production if Node.js is installed)
-    let mut cmd = Command::new("npx");
-    cmd.args(["tsx", "packages/proxy/src/index.ts"]);
-    cmd.current_dir(&app_dir);
-    cmd.env("NODE_ENV", "production");
+    for path in paths.iter().flatten() {
+        if path.exists() {
+            let mut cmd = Command::new("npx");
+            cmd.args(["tsx", &path.to_string_lossy()]);
+            if let Some(dir) = path.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+                cmd.current_dir(dir);
+            }
+            cmd.env("NODE_ENV", "production");
+            match cmd.spawn() {
+                Ok(child) => {
+                    let pid = child.id();
+                    *pid_lock = Some(pid);
+                    return Ok(pid);
+                }
+                Err(e) => eprintln!("[Proxy] Failed to spawn: {}", e),
+            }
+        }
+    }
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to start proxy: {}. Make sure Node.js and tsx are installed.", e))?;
-
-    let pid = child.id();
-    *pid_lock = Some(pid);
-    Ok(pid)
+    Err("Cannot find proxy source. Run this app from the project directory, or start the proxy manually with 'npm run dev'.".to_string())
 }
 
 #[tauri::command]
@@ -155,10 +165,9 @@ pub fn run() {
                 .on_menu_event(move |_app, event| {
                     match event.id().as_ref() {
                         "dashboard" => {
-                            if let Some(window) = handle_menu.get_webview_window("popup") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                            let _ = std::process::Command::new("open")
+                                .arg("http://localhost:3457")
+                                .spawn();
                         }
                         "quit" => {
                             let state = handle_menu.state::<ProxyState>();
