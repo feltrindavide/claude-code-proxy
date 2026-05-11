@@ -39,9 +39,9 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
 
     if bundled.exists() {
         let mut cmd = Command::new("node");
+        cmd.arg("--experimental-specifier-resolution=node");
         cmd.arg(&bundled);
         cmd.env("NODE_ENV", "production");
-        cmd.env("NODE_PATH", resource_dir.join("proxy-bundle/node_modules"));
         cmd.current_dir(resource_dir.join("proxy-bundle"));
         match cmd.spawn() {
             Ok(child) => {
