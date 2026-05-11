@@ -15,6 +15,13 @@ interface ProviderFormProps {
 
 const providerTypes = ['OpenRouter', 'OpenCode', 'Ollama', 'Custom'];
 
+const defaultBaseUrls: Record<string, string> = {
+  'OpenRouter': 'https://openrouter.ai/api',
+  'OpenCode': 'https://opencode.ai/zen',
+  'Ollama': 'http://localhost:11434',
+  'Custom': '',
+};
+
 export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const { toast } = useToast();
   const [name, setName] = useState(provider?.name || '');
@@ -40,11 +47,19 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
         newErrors.baseUrl = 'Must be a valid URL (e.g., https://api.example.com)';
       }
     }
-    if (!provider && !apiKey.trim()) {
+    if (!provider && !apiKey.trim() && providerType !== 'Ollama') {
       newErrors.apiKey = 'API key is required';
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  }
+
+  function handleProviderTypeChange(type: string) {
+    setProviderType(type);
+    // Auto-fill base URL when changing provider type (only for new providers)
+    if (!provider && defaultBaseUrls[type]) {
+      setBaseUrl(defaultBaseUrls[type]);
+    }
   }
 
   async function handleTest() {
@@ -101,36 +116,38 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
         placeholder="e.g., openrouter"
       />
 
+      <div className="space-y-xs">
+        <label className="block text-sm text-body">Provider Type</label>
+        <Select
+          value={providerType}
+          onChange={handleProviderTypeChange}
+          options={providerTypes.map(t => ({ value: t, label: t }))}
+        />
+      </div>
+
       <Input
         label="Base URL"
         value={baseUrl}
         onChange={(e) => setBaseUrl(e.target.value)}
         error={errors.baseUrl}
-        placeholder="e.g., https://openrouter.ai/api/v1"
+        placeholder="e.g., https://openrouter.ai/api"
       />
 
-      <Input
-        label="API Key"
-        type="password"
-        value={apiKey}
-        onChange={(e) => setApiKey(e.target.value)}
-        error={errors.apiKey}
-        placeholder={provider ? 'Leave blank to keep existing key' : 'Enter your API key'}
-      />
-      {provider && apiKey === '••••••••' && (
+      {providerType !== 'Ollama' && (
+        <Input
+          label="API Key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          error={errors.apiKey}
+          placeholder={provider ? 'Leave blank to keep existing key' : 'Enter your API key'}
+        />
+      )}
+      {provider && providerType !== 'Ollama' && apiKey === '••••••••' && (
         <p className="text-small text-muted -mt-xs">
           🔒 API key is stored securely in Keychain — leave as-is to keep current key
         </p>
       )}
-
-      <div className="space-y-xs">
-        <label className="block text-sm text-body">Provider Type</label>
-        <Select
-          value={providerType}
-          onChange={setProviderType}
-          options={providerTypes.map(t => ({ value: t, label: t }))}
-        />
-      </div>
 
       <div className="flex items-center gap-md">
         <label className="flex items-center gap-xs cursor-pointer">
