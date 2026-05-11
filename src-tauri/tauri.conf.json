@@ -5,7 +5,7 @@
   "identifier": "com.claudecode.proxy",
   "build": {
     "beforeDevCommand": "",
-    "beforeBuildCommand": "npm run build && cd packages/proxy && npx tsc",
+    "beforeBuildCommand": "npm run build && bash scripts/bundle-proxy.sh",
     "frontendDist": "../apps/web/out",
     "devUrl": "http://localhost:3457"
   },
@@ -33,6 +33,7 @@
     "targets": ["dmg"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.png"],
+    "resources": ["proxy-bundle/"],
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "12.0"

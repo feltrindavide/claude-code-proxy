@@ -32,20 +32,35 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
         *pid_lock = None;
     }
 
+    // Try bundled proxy (production)
+    let resource_dir = app.path().resource_dir()
+        .map_err(|_| "Cannot find resource directory".to_string())?;
+    let bundled = resource_dir.join("proxy-bundle/dist/index.js");
+
+    if bundled.exists() {
+        let mut cmd = Command::new("node");
+        cmd.arg(&bundled);
+        cmd.env("NODE_ENV", "production");
+        cmd.env("NODE_PATH", resource_dir.join("proxy-bundle/node_modules"));
+        cmd.current_dir(resource_dir.join("proxy-bundle"));
+        match cmd.spawn() {
+            Ok(child) => {
+                let pid = child.id();
+                *pid_lock = Some(pid);
+                return Ok(pid);
+            }
+            Err(e) => return Err(format!("Failed to start proxy: {}. Make sure Node.js is installed.", e)),
+        }
+    }
+
     // Try project directory (dev mode)
     let cwd = std::env::current_dir().ok();
-    let paths = &[
-        cwd.as_ref().map(|d| d.join("packages/proxy/src/index.ts")),
-        Some(std::path::PathBuf::from("packages/proxy/src/index.ts")),
-    ];
-
-    for path in paths.iter().flatten() {
-        if path.exists() {
+    if let Some(cwd) = cwd {
+        let dev_src = cwd.join("packages/proxy/src/index.ts");
+        if dev_src.exists() {
             let mut cmd = Command::new("npx");
-            cmd.args(["tsx", &path.to_string_lossy()]);
-            if let Some(dir) = path.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-                cmd.current_dir(dir);
-            }
+            cmd.args(["tsx", &dev_src.to_string_lossy()]);
+            cmd.current_dir(&cwd);
             cmd.env("NODE_ENV", "production");
             match cmd.spawn() {
                 Ok(child) => {
@@ -53,12 +68,12 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
                     *pid_lock = Some(pid);
                     return Ok(pid);
                 }
-                Err(e) => eprintln!("[Proxy] Failed to spawn: {}", e),
+                Err(e) => eprintln!("[Proxy] Failed to spawn dev: {}", e),
             }
         }
     }
 
-    Err("Cannot find proxy source. Run this app from the project directory, or start the proxy manually with 'npm run dev'.".to_string())
+    Err("Cannot start proxy. Make sure Node.js is installed.".to_string())
 }
 
 #[tauri::command]
