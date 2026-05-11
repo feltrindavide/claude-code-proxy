@@ -7,6 +7,8 @@
 
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { handleProxyRequest } from './proxy.js';
 import { providerService } from './services/provider.js';
 import { configService } from './services/config.js';
@@ -210,6 +212,26 @@ async function loadConfigOnStartup(): Promise<void> {
   }
 }
 
+// Serve frontend static files if bundled together (production build)
+// Placed after all API routes so API takes priority
+const webDir = path.join(__dirname, '../web');
+if (fs.existsSync(webDir)) {
+  console.log(`[Proxy] Serving frontend from ${webDir}`);
+  // Serve static files (only if file exists, otherwise falls through)
+  app.use(express.static(webDir));
+  // Handle Next.js static export paths: /settings -> /settings/index.html
+  // Only matches GET requests not already handled by API routes above
+  app.use((req, res, next) => {
+    if (req.method !== 'GET') return next();
+    const filePath = path.join(webDir, req.path === '/' ? 'index.html' : `${req.path}/index.html`);
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath);
+    } else {
+      next();
+    }
+  });
+}
+
 /**
  * Start the Express server
  */
@@ -237,10 +259,7 @@ export async function startServer(port: number = DEFAULT_PORT, host: string = DE
   });
 }
 
-// Start server if run directly
-const mode = process.env.NODE_ENV || 'development';
-if (mode === 'development' || !process.env.NODE_ENV) {
-  startServer().catch(console.error);
-}
+// Start server - always starts regardless of NODE_ENV
+startServer().catch(console.error);
 
 export { app };

@@ -43,38 +43,58 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
             .args(["-c", "lsof -ti :3456 2>/dev/null | xargs kill -9 2>/dev/null"])
             .output();
 
-        // Build PATH with common Node.js locations + nvm
+        // Find Node.js binary
         let home = std::env::var("HOME").unwrap_or_default();
-        let nvm_base = format!("{}/.nvm/versions/node", home);
-        let nvm_bin = std::fs::read_dir(&nvm_base).ok()
-            .and_then(|entries| {
+
+        // 1) Try nvm-installed node (latest version)
+        let node = std::fs::read_dir(format!("{}/.nvm/versions/node", home))
+            .ok().and_then(|entries| {
                 let mut versions: Vec<_> = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir())
                     .collect();
                 versions.sort_by_key(|e| e.file_name());
                 versions.last()
-                    .map(|e| e.path().join("bin").to_string_lossy().to_string())
+                    .map(|e| e.path().join("bin/node"))
             })
-            .unwrap_or_default();
-        let nvm_path = if nvm_bin.is_empty() { String::new() } else { format!(":{}", nvm_bin) };
-        let full_path = format!(
-            "{}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin{}",
-            home, nvm_path
-        );
+            .filter(|p| p.exists())
+            // 2) Fall back to Homebrew (Apple Silicon)
+            .or_else(|| {
+                let p = std::path::PathBuf::from("/opt/homebrew/bin/node");
+                if p.exists() { Some(p) } else { None }
+            })
+            // 3) Fall back to Homebrew (Intel)
+            .or_else(|| {
+                let p = std::path::PathBuf::from("/usr/local/bin/node");
+                if p.exists() { Some(p) } else { None }
+            });
 
-        let mut cmd = Command::new("node");
-        cmd.arg(&bundled);
+        let node = match node {
+            Some(n) => n,
+            None => return Err("Node.js not found. Make sure Node.js is installed (via nvm, homebrew, or globally).".to_string()),
+        };
+
+        // Use absolute path for the bundled script (avoid cd / relative path issues)
+        let proxy_bundle = resource_dir.join("proxy-bundle");
+        let bundled_abs = bundled.to_string_lossy().to_string();
+
+        let mut cmd = Command::new(node.to_string_lossy().as_ref());
+        cmd.arg(&bundled_abs);
         cmd.env("NODE_ENV", "production");
-        cmd.env("PATH", &full_path);
-        cmd.current_dir(resource_dir.join("proxy-bundle"));
+        cmd.current_dir(&proxy_bundle);
         // Capture stderr for debugging
         cmd.stderr(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.current_dir(resource_dir.join("proxy-bundle"));
+        cmd.stdout(std::process::Stdio::null());
+
+        // Write PID to file for external tracking
+        let pid_dir = format!("{}/.claude-code-proxy", home);
+        let _ = std::fs::create_dir_all(&pid_dir);
+
         match cmd.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
+                // Write PID to file
+                let _ = std::fs::write(format!("{}/proxy.pid", pid_dir), pid.to_string());
                 // Log stderr in background
                 if let Some(stderr) = child.stderr.take() {
                     std::thread::spawn(move || {
@@ -221,7 +241,7 @@ pub fn run() {
                     match event.id().as_ref() {
                         "dashboard" => {
                             let _ = std::process::Command::new("open")
-                                .arg("http://localhost:3457")
+                                .arg("http://localhost:3456")
                                 .spawn();
                         }
                         "quit" => {

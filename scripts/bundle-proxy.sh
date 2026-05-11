@@ -17,6 +17,16 @@ npx esbuild "$PROXY_SRC/src/index.ts" \
   --outfile="$BUNDLE_DIR/dist/index.cjs" \
   2>&1
 
+# Copy frontend static files into the bundle
+WEB_OUT="apps/web/out"
+if [ -d "$WEB_OUT" ]; then
+  echo ">>> Copying frontend static files..."
+  cp -r "$WEB_OUT" "$BUNDLE_DIR/web"
+  echo ">>> Frontend copied ($(du -sh $BUNDLE_DIR/web | cut -f1))"
+else
+  echo ">>> WARNING: Frontend build not found at $WEB_OUT. Run 'npm run build' first."
+fi
+
 # Package type
 echo '{"type":"commonjs","name":"proxy-bundle"}' > "$BUNDLE_DIR/package.json"
 

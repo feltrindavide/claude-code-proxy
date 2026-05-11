@@ -146,12 +146,12 @@ export default function PopupPage() {
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => openUrl('http://localhost:3457')}
+        <button onClick={() => openUrl('http://localhost:3456')}
           style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Dashboard
         </button>
-        <button onClick={() => openUrl('http://localhost:3457/settings')}
+        <button onClick={() => openUrl('http://localhost:3456/settings')}
           style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Settings

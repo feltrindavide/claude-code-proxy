@@ -237,6 +237,11 @@ export function getUserFacingErrorMessage(
   error: unknown,
   timeoutMs?: number,
 ): string {
+  // Handle string errors (e.g. thrown directly or passed to emitAnthropicError)
+  if (typeof error === 'string') {
+    return error || 'Provider request failed.';
+  }
+
   if (
     error instanceof DOMException &&
     (error.name === 'AbortError' || error.constructor.name === 'AbortSignal')
