@@ -5,7 +5,7 @@
   "identifier": "com.claudecode.proxy",
   "build": {
     "beforeDevCommand": "",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && cd packages/proxy && npx tsc",
     "frontendDist": "../apps/web/out",
     "devUrl": "http://localhost:3457"
   },

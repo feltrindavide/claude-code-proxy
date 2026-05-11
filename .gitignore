@@ -1,3 +1,40 @@
-apps/web/.next/
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+dist/
+apps/web/.next/
+apps/web/out/
+packages/proxy/dist/
+
+# Rust
 src-tauri/target/
+
+# Third-party reference code
+reference/
+
+# Design files
+design/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
