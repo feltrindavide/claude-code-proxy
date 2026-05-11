@@ -35,6 +35,7 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [keyEditing, setKeyEditing] = useState(false);
 
   function validate() {
     const newErrors: Record<string, string> = {};
@@ -137,34 +138,51 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
       {providerType !== 'Ollama' && (
         <div className="space-y-xs">
           <label className="block text-sm text-body">API Key</label>
-          <div className="relative">
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={provider ? 'Leave blank to keep existing key' : 'Enter your API key'}
-              className="w-full bg-surface-card text-ink border border-hairline rounded-md text-body focus-ring h-11 px-4 pr-10"
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink focus-ring"
-              aria-label={showKey ? 'Hide API key' : 'Show API key'}
-            >
-              {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
-          </div>
+          {!keyEditing ? (
+            <div className="flex items-center justify-between bg-surface-card border border-hairline rounded-md h-11 px-4">
+              <span className={provider ? 'text-ink text-sm' : 'text-muted text-sm'}>
+                {provider ? '✓ Configured' : '✗ Not configured'}
+              </span>
+              <button
+                type="button"
+                onClick={() => { setKeyEditing(true); if (!provider) setApiKey(''); }}
+                className="text-sm text-primary hover:text-primary-active font-medium focus-ring rounded px-2 py-1"
+              >
+                {provider ? 'Change' : 'Add Key'}
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div className="relative">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={provider ? 'New API key (leave empty to keep current)' : 'Enter your API key'}
+                  className="w-full bg-surface-card text-ink border border-hairline rounded-md text-body focus-ring h-11 px-4 pr-10"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink focus-ring"
+                  aria-label={showKey ? 'Hide' : 'Show'}
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <div className="flex gap-xs mt-xs">
+                <button
+                  type="button"
+                  onClick={() => { setKeyEditing(false); setShowKey(false); if (provider) setApiKey('••••••••'); else setApiKey(''); }}
+                  className="text-small text-muted hover:text-ink"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {errors.apiKey && <p className="text-small text-semantic-error">{errors.apiKey}</p>}
-          {provider && !showKey && (
-            <p className="text-small text-muted -mt-xs">
-              🔒 Stored in Keychain — leave as-is to keep, or type a new key to replace
-            </p>
-          )}
-          {provider && showKey && (
-            <p className="text-small text-muted -mt-xs">
-              Showing masked key for security. Type a new value to replace it.
-            </p>
-          )}
         </div>
       )}
 
