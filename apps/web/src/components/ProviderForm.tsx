@@ -29,6 +29,8 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const [apiKey, setApiKey] = useState(provider ? '••••••••' : '');
   const [providerType, setProviderType] = useState(provider?.providerType || 'Custom');
   const [showKey, setShowKey] = useState(false);
+  const [enabled, setEnabled] = useState(provider?.enabled ?? true);
+  const [priority, setPriority] = useState(provider?.priority ?? 1);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
