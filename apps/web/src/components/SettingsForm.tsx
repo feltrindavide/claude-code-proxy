@@ -42,7 +42,7 @@ export function SettingsForm() {
   }
 
   return (
-    <div className="max-w-2xl space-y-lg">
+    <div className="max-w-2xl mx-auto space-y-lg">
       <h2 className="font-display text-[22px] text-ink">Settings</h2>
 
       {/* Proxy Configuration */}

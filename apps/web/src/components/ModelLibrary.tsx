@@ -181,7 +181,7 @@ export function ModelLibrary() {
 
   if (providers.length === 0) {
     return (
-      <div className="max-w-2xl">
+      <div className="max-w-2xl mx-auto">
         <h2 className="font-display text-[22px] text-ink mb-lg">Model Library</h2>
         <Card className="text-center py-2xl">
           <h3 className="font-heading text-[18px] text-ink mb-xs">No providers configured</h3>
@@ -192,7 +192,7 @@ export function ModelLibrary() {
   }
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-2xl mx-auto">
       <h2 className="font-display text-[22px] text-ink mb-lg">Model Library</h2>
       <p className="text-body text-muted mb-lg">
         Manage available models for each provider. Use <strong>Scan</strong> to fetch available models from the provider API.

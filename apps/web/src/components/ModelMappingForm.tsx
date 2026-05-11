@@ -107,7 +107,7 @@ export function ModelMappingForm() {
   }
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-2xl mx-auto">
       <h2 className="font-display text-[22px] text-ink mb-lg">Model Mapping</h2>
       <p className="text-body text-muted mb-lg">
         Map Claude tiers to providers and models. Models come from the <a href="/models" className="text-primary hover:underline">Model Library</a>.
