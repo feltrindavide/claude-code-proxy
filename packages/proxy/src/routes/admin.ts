@@ -14,9 +14,9 @@
  */
 
 import { Router } from 'express';
-import { configService } from '../services/config';
-import { keychainService } from '../services/keychain';
-import { providerService } from '../services/provider';
+import { configService } from '../services/config.js';
+import { keychainService } from '../services/keychain.js';
+import { providerService } from '../services/provider.js';
 import { providerValidatorService } from '../services/provider-validator.js';
 import { requestLogService } from '../services/requestLog.js';
 import { rateLimiterService } from '../services/rateLimiter.js';
