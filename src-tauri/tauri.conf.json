@@ -30,10 +30,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg"],
+    "targets": [
+      "dmg",
+      "app"
+    ],
     "createUpdaterArtifacts": true,
-    "icon": ["icons/icon.png"],
-    "resources": ["proxy-bundle/"],
+    "icon": [
+      "icons/icon.png"
+    ],
+    "resources": [
+      "proxy-bundle/"
+    ],
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "12.0"
@@ -41,7 +48,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdCODk1QkM1NzQ0M0RDRTIKUldUaTNFTjB4VnVKZTYyUzlkak52TEs4MkhZTStQTkRSeVM2VGNQRTFXNlRBa0VEeHF4TDNGT2oK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIzNjA5QUU3RDEwNDg5MzIKUldReWlRVFI1NXBnSTQxSXY5cjdldk5pM2V2dFZRUndKVE5HaHR5aU1QQks3blhiMEl5MFVCREQK",
       "endpoints": [
         "https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json"
       ]
