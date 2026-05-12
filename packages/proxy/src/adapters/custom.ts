@@ -257,13 +257,12 @@ export class CustomAdapter implements ProviderAdapter {
         const finishReason = choice.finish_reason as string | null | undefined;
 
         // Handle reasoning/thinking content (OpenAI extended thinking format)
-        // DeepSeek emits reasoning_content instead of content — treat as regular text
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) {
+          for (const evt of sse.ensureThinkingBlock()) {
             yield evt;
           }
-          yield sse.emitTextDelta(reasoningContent);
+          yield sse.emitThinkingDelta(reasoningContent);
         }
 
         // Handle text content deltas
@@ -315,7 +314,7 @@ export class CustomAdapter implements ProviderAdapter {
           for (const evt of sse.closeContentBlocks()) {
             yield evt;
           }
-          yield sse.message_delta(mapStopReason(finishReason), 0);
+          yield sse.message_delta(mapStopReason(finishReason));
           yield sse.message_stop();
           return;
         }
@@ -327,7 +326,7 @@ export class CustomAdapter implements ProviderAdapter {
       }
       const userMsg = getUserFacingErrorMessage(error);
       yield sse.emitTopLevelError(userMsg);
-      yield sse.message_delta('end_turn', 0);
+      yield sse.message_delta('end_turn');
       yield sse.message_stop();
       return;
     }
@@ -336,7 +335,7 @@ export class CustomAdapter implements ProviderAdapter {
     for (const evt of sse.closeContentBlocks()) {
       yield evt;
     }
-    yield sse.message_delta('end_turn', 0);
+    yield sse.message_delta('end_turn');
     yield sse.message_stop();
   }
 

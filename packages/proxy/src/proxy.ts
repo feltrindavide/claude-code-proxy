@@ -278,7 +278,7 @@ export async function handleProxyRequest(
         model: body.model,
         stop_reason: stopReason,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
+        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(contentText.length / 4)) },
       });
     }
   } catch (error) {

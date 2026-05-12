@@ -182,12 +182,18 @@ export class ContentBlockManager {
 
 export class SSEBuilder {
   private blocks = new ContentBlockManager();
+  private totalOutputChars = 0;
 
   constructor(
     private messageId: string,
     private model: string,
     private inputTokens: number,
   ) {}
+
+  /** Estimate output tokens from accumulated content (rough: ~4 chars/token) */
+  private estimateOutputTokens(): number {
+    return Math.max(1, Math.round(this.totalOutputChars / 4));
+  }
 
   /** Emit message_start with id, model, role=assistant, content=[], usage */
   message_start(): string {
@@ -207,11 +213,12 @@ export class SSEBuilder {
   }
 
   /** Emit message_delta with stop_reason and usage */
-  message_delta(stopReason: string, outputTokens: number): string {
+  message_delta(stopReason: string, outputTokens?: number): string {
+    const tokens = outputTokens ?? this.estimateOutputTokens();
     return formatSSEEvent('message_delta', {
       type: 'message_delta',
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { input_tokens: this.inputTokens, output_tokens: outputTokens },
+      usage: { input_tokens: this.inputTokens, output_tokens: tokens },
     });
   }
 
@@ -230,20 +237,21 @@ export class SSEBuilder {
     return this.blocks.ensureThinkingBlock();
   }
 
-  /** Emit a content_block_delta with thinking_delta */
-  emitThinkingDelta(thinking: string): string {
-    return this.blocks.emitThinkingDelta(thinking);
-  }
-
   /** Emit a content_block_delta with text_delta */
   emitTextDelta(content: string): string {
-    // Use the tracked text index — do NOT allocate a new one per delta
+    this.totalOutputChars += content.length;
     const index = this.blocks['textIndex'] >= 0 ? this.blocks['textIndex'] : this.blocks.allocateIndex();
     return formatSSEEvent('content_block_delta', {
       type: 'content_block_delta',
       index,
       delta: { type: 'text_delta', text: content },
     });
+  }
+
+  /** Emit a content_block_delta with thinking_delta */
+  emitThinkingDelta(thinking: string): string {
+    this.totalOutputChars += thinking.length;
+    return this.blocks.emitThinkingDelta(thinking);
   }
 
   /** Close any open content blocks; returns events array */
