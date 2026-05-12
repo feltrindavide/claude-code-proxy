@@ -134,19 +134,20 @@ export async function handleProxyRequest(
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), adapter.timeouts.streaming);
 
-        const response = await fetch(
-          `${resolution.provider.baseUrl}${adapter.apiPath}`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-              Accept: 'text/event-stream',
+          const response = await fetch(
+            `${resolution.provider.baseUrl}${adapter.apiPath}`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+                Accept: 'text/event-stream',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+              },
+              body: JSON.stringify(providerBody),
+              signal: controller.signal,
             },
-            body: JSON.stringify(providerBody),
-            signal: controller.signal,
-          },
-        );
+          );
 
         clearTimeout(timeout);
         return response;
