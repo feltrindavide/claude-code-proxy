@@ -44,8 +44,8 @@ export function SettingsForm() {
     setUpdateStatus('Checking...');
     setUpdateAvailable(null);
     try {
-      // Fetch latest version from GitHub
-      const resp = await fetch('https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json');
+      // Fetch latest version via local proxy (avoids CORS issues)
+      const resp = await fetch('http://localhost:3456/update-check');
       const data = await resp.json();
       const latestVer = data.version;
       console.log('[Update] Latest:', latestVer, 'Current:', appVersion);

@@ -250,6 +250,17 @@ if (fs.existsSync(webDir)) {
   });
 }
 
+// Update check endpoint (proxied to avoid CORS issues from Tauri webview)
+app.get('/update-check', async (_req, res) => {
+  try {
+    const resp = await fetch('https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json');
+    const data = await resp.json();
+    res.json({ version: data.version });
+  } catch {
+    res.status(502).json({ error: 'Failed to check for updates' });
+  }
+});
+
 /**
  * Start the Express server
  */
