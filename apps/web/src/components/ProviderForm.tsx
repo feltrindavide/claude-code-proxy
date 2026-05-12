@@ -19,7 +19,7 @@ const defaultBaseUrls: Record<string, string> = {
   'OpenRouter': 'https://openrouter.ai/api',
   'OpenCode': 'https://opencode.ai/zen',
   'OpenCode Zen': 'https://opencode.ai/zen',
-  'OpenCode Go': 'https://opencode.ai/zen/go',
+  'OpenCode Go': 'https://opencode.ai/go',
   'Ollama': 'http://localhost:11434',
   'Custom': '',
 };
