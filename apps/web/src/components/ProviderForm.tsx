@@ -13,11 +13,13 @@ interface ProviderFormProps {
   onClose: () => void;
 }
 
-const providerTypes = ['OpenRouter', 'OpenCode', 'Ollama', 'Custom'];
+const providerTypes = ['OpenRouter', 'OpenCode', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Custom'];
 
 const defaultBaseUrls: Record<string, string> = {
   'OpenRouter': 'https://openrouter.ai/api',
   'OpenCode': 'https://opencode.ai/zen',
+  'OpenCode Zen': 'https://opencode.ai/zen',
+  'OpenCode Go': 'https://opencode.ai/go',
   'Ollama': 'http://localhost:11434',
   'Custom': '',
 };
@@ -28,6 +30,7 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || '');
   const [apiKey, setApiKey] = useState(provider ? '••••••••' : '');
   const [providerType, setProviderType] = useState(provider?.providerType || 'Custom');
+  const [apiFormat, setApiFormat] = useState<'openai' | 'anthropic'>('openai');
   const [showKey, setShowKey] = useState(false);
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
   const [priority, setPriority] = useState(provider?.priority ?? 1);
@@ -56,6 +59,18 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
     return Object.keys(newErrors).length === 0;
   }
 
+  function getInternalProviderType(displayType: string): string {
+    const map: Record<string, string> = {
+      'OpenRouter': 'OpenRouter',
+      'OpenCode': 'opencode',
+      'OpenCode Zen': 'opencode-zen',
+      'OpenCode Go': 'opencode-go',
+      'Ollama': 'Ollama',
+      'Custom': apiFormat === 'anthropic' ? 'custom-anthropic' : 'custom',
+    };
+    return map[displayType] || displayType;
+  }
+
   function handleProviderTypeChange(type: string) {
     setProviderType(type);
     // Auto-fill base URL when changing provider type (only for new providers)
@@ -74,7 +89,8 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
     try {
       // For new providers, save first then test
       if (!provider) {
-        await saveProvider({ name, baseUrl, apiKey, providerType, enabled, priority });
+        const internalType = getInternalProviderType(providerType);
+        await saveProvider({ name, baseUrl, apiKey, providerType: internalType, enabled, priority });
       }
       const result = await testProviderConnection(name);
       setTestResult(result);
@@ -97,10 +113,11 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
 
     setSaving(true);
     try {
+      const internalType = getInternalProviderType(providerType);
       // Don't send masked key — backend will keep existing keychain entry
       const submitApiKey = apiKey === '••••••••' ? '' : apiKey;
-      await saveProvider({ name, baseUrl, apiKey: submitApiKey, providerType, enabled, priority });
-      onSave({ name, baseUrl, apiKey: submitApiKey, providerType, enabled, priority });
+      await saveProvider({ name, baseUrl, apiKey: submitApiKey, providerType: internalType, enabled, priority });
+      onSave({ name, baseUrl, apiKey: submitApiKey, providerType: internalType, enabled, priority });
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Failed to save provider', 'error');
     } finally {
@@ -126,6 +143,20 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
           options={providerTypes.map(t => ({ value: t, label: t }))}
         />
       </div>
+
+      {providerType === 'Custom' && (
+        <div className="space-y-xs">
+          <label className="block text-sm text-body">API Format</label>
+          <Select
+            value={apiFormat}
+            onChange={(v) => setApiFormat(v as 'openai' | 'anthropic')}
+            options={[
+              { value: 'openai', label: 'OpenAI (/v1/chat/completions)' },
+              { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
+            ]}
+          />
+        </div>
+      )}
 
       <Input
         label="Base URL"

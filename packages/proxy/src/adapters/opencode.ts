@@ -34,7 +34,7 @@ import {
 } from '../services/sse-transformer.js';
 
 export class OpenCodeAdapter implements ProviderAdapter {
-  readonly providerType = 'opencode';
+  readonly providerType: string = 'opencode';
   readonly apiPath = '/v1/messages';
   timeouts = { streaming: 120_000, nonStreaming: 30_000 };
 

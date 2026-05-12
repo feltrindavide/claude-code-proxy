@@ -33,25 +33,39 @@ import {
 } from '../services/sse-transformer.js';
 
 export class CustomAdapter implements ProviderAdapter {
-  readonly providerType = 'custom';
-  readonly apiPath = '/v1/chat/completions';
+  readonly providerType: string;
+  readonly apiPath: string;
   timeouts = { streaming: 120_000, nonStreaming: 30_000 };
 
+  constructor(options?: { apiFormat?: 'openai' | 'anthropic'; providerType?: string }) {
+    const format = options?.apiFormat || 'openai';
+    this.providerType = options?.providerType || 'custom';
+    this.apiPath = format === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
+  }
+
   /**
-   * Transform Anthropic messages → OpenAI chat/completions format
-   * (Same as OpenCodeAdapter — generic OpenAI-compatible)
+   * Transform request: passthrough for Anthropic format, convert for OpenAI format
    */
   transformRequest(
     body: AnthropicMessagesBody,
     route: RouteResolution,
   ): Record<string, unknown> {
+    // Native Anthropic passthrough (just override model and enable streaming)
+    if (this.apiPath === '/v1/messages') {
+      return {
+        ...body,
+        model: route.targetModel,
+        stream: true,
+      };
+    }
+
+    // OpenAI format: convert Anthropic messages → OpenAI chat/completions format
     const messages: Record<string, unknown>[] = [];
 
     let deferredText: string | null = null;
 
     for (const msg of body.messages) {
       if (msg.role === 'assistant') {
-        // Assistant messages: extract text content + tool_calls
         let textContent = '';
         const toolCalls: Array<Record<string, unknown>> = [];
         let foundToolUse = false;
@@ -62,7 +76,6 @@ export class CustomAdapter implements ProviderAdapter {
           for (const block of msg.content) {
             if (block.type === 'text') {
               if (foundToolUse || deferredText !== null) {
-                // Text after a tool_use block → defer to separate assistant msg
                 deferredText = (deferredText ?? '') + (block.text ?? '');
               } else {
                 textContent += block.text ?? '';
@@ -78,7 +91,6 @@ export class CustomAdapter implements ProviderAdapter {
                 },
               });
             } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
-              // Thinking blocks: wrap in <think> tags for OpenAI-compatible providers
               if (block.type === 'thinking' && block.thinking) {
                 const thinkContent = block.thinking;
                 if (foundToolUse || deferredText !== null) {
@@ -87,21 +99,16 @@ export class CustomAdapter implements ProviderAdapter {
                   textContent += `<think>${thinkContent}</think>`;
                 }
               }
-              // redacted_thinking: silently dropped
             }
           }
         }
 
-        const assistantMsg: Record<string, unknown> = {
-          role: 'assistant',
-          content: textContent,
-        };
+        const assistantMsg: Record<string, unknown> = { role: 'assistant', content: textContent };
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
-        // Flush deferred text BEFORE processing user message (it belongs to previous assistant's post-tool text)
         if (deferredText !== null) {
           messages.push({ role: 'assistant', content: deferredText });
           deferredText = null;
@@ -138,24 +145,17 @@ export class CustomAdapter implements ProviderAdapter {
           messages.push(tr);
         }
       } else {
-        // Fallback: pass through as-is
         messages.push({ role: msg.role, content: msg.content });
       }
     }
 
-    // Flush any remaining deferred text at end of message list
     if (deferredText !== null) {
       messages.push({ role: 'assistant', content: deferredText });
       deferredText = null;
     }
 
-    const result: Record<string, unknown> = {
-      model: route.targetModel,
-      messages,
-      stream: true,
-    };
+    const result: Record<string, unknown> = { model: route.targetModel, messages, stream: true };
 
-    // Forward system prompt as first system message (Claude Code sends it as top-level field)
     if (body.system) {
       const systemText = typeof body.system === 'string'
         ? body.system
@@ -167,22 +167,13 @@ export class CustomAdapter implements ProviderAdapter {
       }
     }
 
-    if (body.max_tokens !== undefined) {
-      result.max_tokens = body.max_tokens;
-    }
-    if (body.temperature !== undefined) {
-      result.temperature = body.temperature;
-    }
+    if (body.max_tokens !== undefined) result.max_tokens = body.max_tokens;
+    if (body.temperature !== undefined) result.temperature = body.temperature;
 
-    // Map Anthropic tools → OpenAI tools
     if (body.tools && body.tools.length > 0) {
       result.tools = body.tools.map((t) => ({
         type: 'function',
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.input_schema,
-        },
+        function: { name: t.name, description: t.description, parameters: t.input_schema },
       }));
     }
 
@@ -190,8 +181,7 @@ export class CustomAdapter implements ProviderAdapter {
   }
 
   /**
-   * Transform OpenAI SSE → Anthropic SSE via SSEBuilder
-   * (Same as OpenCodeAdapter)
+   * Transform response: passthrough for Anthropic SSE, convert OpenAI → Anthropic
    */
   async *transformResponse(
     upstreamResponse: Response,
@@ -202,6 +192,38 @@ export class CustomAdapter implements ProviderAdapter {
       return;
     }
 
+    // Native Anthropic passthrough — just filter [DONE] terminal events
+    if (this.apiPath === '/v1/messages') {
+      const reader = upstreamResponse.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const events: string[] = [];
+
+      const { createParser } = await import('eventsource-parser');
+      const parser = createParser({
+        onEvent: (event) => {
+          if (event.data === '[DONE]') return;
+          const eventType = event.event || 'message';
+          events.push(`event: ${eventType}\ndata: ${event.data}\n\n`);
+        },
+      });
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) parser.feed(buffer);
+          for (const evt of events.splice(0)) yield evt;
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        parser.feed(buffer);
+        buffer = '';
+        for (const evt of events.splice(0)) yield evt;
+      }
+      return;
+    }
+
+    // OpenAI format: convert OpenAI SSE → Anthropic SSE
     const sse = new SSEBuilder(options.messageId, options.model, options.inputTokens);
     yield sse.message_start();
 
