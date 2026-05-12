@@ -159,21 +159,91 @@ export async function handleProxyRequest(
       (req as any)._retryAttempt = retryAttempt;
     }
 
-    // 7. Set SSE response headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    // 7. Check if client wants streaming
+    const wantsStream = body.stream !== false;
 
     // 8. Transform and stream response (provider SSE → Anthropic SSE)
-    for await (const event of adapter.transformResponse(upstreamResponse, {
-      messageId: `msg_${crypto.randomUUID()}`,
-      model: body.model,
-      inputTokens: 0,
-    })) {
-      res.write(event);
+    if (wantsStream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+
+      for await (const event of adapter.transformResponse(upstreamResponse, {
+        messageId: `msg_${crypto.randomUUID()}`,
+        model: body.model,
+        inputTokens: 0,
+      })) {
+        res.write(event);
+      }
+      res.end();
+    } else {
+      // Non-streaming: accumulate events into a complete JSON response
+      res.setHeader('Content-Type', 'application/json');
+      let contentText = '';
+      let stopReason = 'end_turn';
+      let toolUseId = '';
+      let toolUseName = '';
+      let toolUseInput = '';
+
+      for await (const event of adapter.transformResponse(upstreamResponse, {
+        messageId: `msg_${crypto.randomUUID()}`,
+        model: body.model,
+        inputTokens: 0,
+      })) {
+        // Parse SSE event to extract data
+        const dataMatch = event.match(/^data: (.+)$/m);
+        if (!dataMatch) continue;
+        try {
+          const parsed = JSON.parse(dataMatch[1]);
+          if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+            contentText += parsed.delta.text || '';
+          } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'input_json_delta') {
+            toolUseInput += parsed.delta.partial_json || '';
+          } else if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
+            toolUseId = parsed.content_block.id || '';
+            toolUseName = parsed.content_block.name || '';
+            toolUseInput = '';
+          } else if (parsed.type === 'message_delta') {
+            stopReason = parsed.delta?.stop_reason || 'end_turn';
+          }
+        } catch {}
+      }
+
+      // Build content array
+      const content: any[] = [];
+      if (contentText) {
+        content.push({ type: 'text', text: contentText });
+      }
+      if (toolUseId) {
+        try {
+          content.push({
+            type: 'tool_use',
+            id: toolUseId,
+            name: toolUseName,
+            input: JSON.parse(toolUseInput || '{}'),
+          });
+        } catch {
+          content.push({
+            type: 'tool_use',
+            id: toolUseId,
+            name: toolUseName,
+            input: {},
+          });
+        }
+      }
+
+      res.json({
+        id: `msg_${crypto.randomUUID()}`,
+        type: 'message',
+        role: 'assistant',
+        content,
+        model: body.model,
+        stop_reason: stopReason,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      });
     }
-    res.end();
   } catch (error) {
     emitAnthropicError(res, error);
   }
