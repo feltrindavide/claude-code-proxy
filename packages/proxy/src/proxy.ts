@@ -139,6 +139,14 @@ export async function handleProxyRequest(
     // Only boost for small max_tokens (classifier-style requests).
     const boosted = 2048;
     (providerBody as any).max_tokens = boosted;
+    
+    // Add system instruction to suppress chain-of-thought reasoning
+    // DeepSeek defaults to verbose analysis even for simple requests
+    (providerBody as any).messages = [
+      { role: 'system', content: 'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.' },
+      ...((providerBody as any).messages || [])
+    ];
+    
     console.log(`[Proxy] Boosted max_tokens from ${originalMaxTokens} to ${boosted} for ${resolution.targetModel} (reasoning overhead)`);
   }
 
@@ -188,13 +196,21 @@ export async function handleProxyRequest(
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
 
+      // Batch writes to reduce overhead from DeepSeek's many tiny reasoning chunks
+      const buf: string[] = [];
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: 0,
       })) {
-        res.write(event);
+        buf.push(event);
+        // Flush in batches of 15 events or on message boundaries
+        if (buf.length >= 15 || event.includes('message_') || event.includes('"error"')) {
+          res.write(buf.join(''));
+          buf.length = 0;
+        }
       }
+      if (buf.length > 0) res.write(buf.join(''));
       res.end();
     } else {
       // Non-streaming: accumulate events into a complete JSON response
