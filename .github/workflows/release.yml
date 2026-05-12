@@ -3,6 +3,10 @@ on:
   push:
     tags: ["v*"]
 
+# Grant write access to releases
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -28,10 +32,27 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Upload DMG
+      - name: Generate updater manifest
+        run: |
+          SIG=$(cat src-tauri/target/release/bundle/macos/ClaudeCode\ Proxy.app.tar.gz.sig)
+          VERSION="${GITHUB_REF_NAME#v}"
+          cat > src-tauri/target/release/bundle/macos/latest.json << EOF
+          {
+            "version": "$VERSION",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ClaudeCode.Proxy.app.tar.gz",
+            "signature": "$SIG"
+          }
+          EOF
+
+      - name: Upload artifacts
         uses: softprops/action-gh-release@v2
         with:
           files: |
             src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/dmg/latest.json
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            src-tauri/target/release/bundle/macos/latest.json
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

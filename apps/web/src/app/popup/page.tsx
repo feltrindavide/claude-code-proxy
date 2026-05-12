@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
+import { checkForUpdates } from '@/services/updater';
 
 const API = 'http://localhost:3456';
 
@@ -23,6 +24,22 @@ export default function PopupPage() {
   const [health, setHealth] = useState<any>(null);
   const [routes, setRoutes] = useState<RouteEntry[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+
+  // Check for updates on mount (only in Tauri)
+  useEffect(() => {
+    if ((window as any).__TAURI__) {
+      setUpdateStatus('Checking for updates...');
+      checkForUpdates().then((result) => {
+        if (result.available) {
+          setUpdateStatus(`Updated to v${result.version}!`);
+          setTimeout(() => setUpdateStatus(null), 5000);
+        } else {
+          setUpdateStatus(null);
+        }
+      }).catch(() => setUpdateStatus(null));
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -94,6 +111,13 @@ export default function PopupPage() {
           {status === 'running' ? 'Running' : 'Stopped'}
         </span>
       </div>
+
+      {/* Update status */}
+      {updateStatus && (
+        <div style={{ fontSize: 10, color: 'var(--color-primary)', textAlign: 'center', marginBottom: 8, padding: '4px 8px', borderRadius: 6, background: 'rgba(245,78,0,0.08)' }}>
+          {updateStatus}
+        </div>
+      )}
 
       {/* Status */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--color-hairline-soft)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
