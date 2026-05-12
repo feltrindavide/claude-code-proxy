@@ -252,6 +252,10 @@ export async function handleProxyRequest(
       if (contentText) {
         content.push({ type: 'text', text: contentText });
       }
+      // Claude Code doesn't handle empty content arrays well
+      if (content.length === 0 && !toolUseId) {
+        content.push({ type: 'text', text: '(no output)' });
+      }
       if (toolUseId) {
         try {
           content.push({
