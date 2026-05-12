@@ -1,6 +1,5 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-import { checkForUpdates } from '@/services/updater';
 
 const API = 'http://localhost:3456';
 
@@ -24,32 +23,6 @@ export default function PopupPage() {
   const [health, setHealth] = useState<any>(null);
   const [routes, setRoutes] = useState<RouteEntry[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
-
-  // Check for updates on mount and every 5 minutes
-  useEffect(() => {
-    let cancelled = false;
-    async function check() {
-      try {
-        setUpdateStatus('Checking for updates...');
-        const result = await checkForUpdates();
-        if (!cancelled) {
-          if (result.available) {
-            setUpdateStatus(`Updated to v${result.version}!`);
-            setTimeout(() => setUpdateStatus(null), 5000);
-          } else {
-            setUpdateStatus(null);
-          }
-        }
-      } catch {
-        if (!cancelled) setUpdateStatus(null);
-      }
-    }
-    check();
-    const interval = setInterval(check, 5 * 60 * 1000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, []);
-
   const refresh = useCallback(async () => {
     try {
       const [h, r, p] = await Promise.all([
@@ -121,13 +94,6 @@ export default function PopupPage() {
         </span>
       </div>
 
-      {/* Update status */}
-      {updateStatus && (
-        <div style={{ fontSize: 10, color: 'var(--color-primary)', textAlign: 'center', marginBottom: 8, padding: '4px 8px', borderRadius: 6, background: 'rgba(245,78,0,0.08)' }}>
-          {updateStatus}
-        </div>
-      )}
-
       {/* Status */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--color-hairline-soft)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
         <div>
@@ -178,7 +144,7 @@ export default function PopupPage() {
       </div>
 
       {/* Buttons */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 8 }}>
         <button onClick={() => openUrl('http://localhost:3456')}
           style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
@@ -190,23 +156,6 @@ export default function PopupPage() {
           Settings
         </button>
       </div>
-      <button onClick={async () => {
-          setUpdateStatus('Checking...');
-          try {
-            const r = await checkForUpdates();
-            if (r.available) setUpdateStatus(`Updated to v${r.version}!`);
-            else setUpdateStatus('✓ Up to date');
-          } catch (e: any) {
-            setUpdateStatus(`✗ ${e?.message || 'Check failed'}`);
-            console.error('[Update]', e);
-          }
-          setTimeout(() => setUpdateStatus(null), 5000);
-        }}
-        style={{ width: '100%', padding: 5, border: 'none', borderRadius: 6, fontSize: 10, fontWeight: 500,
-          cursor: 'pointer', background: 'transparent', color: 'var(--color-muted)',
-          textDecoration: 'underline', textUnderlineOffset: 2 }}>
-        Check for Updates
-      </button>
     </div>
   );
 }
