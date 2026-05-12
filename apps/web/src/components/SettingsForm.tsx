@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchConfig } from '@/lib/api';
+import { checkForUpdates } from '@/services/updater';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { Shield } from 'lucide-react';
+import { Shield, RefreshCw } from 'lucide-react';
 
 export function SettingsForm() {
   const { toast } = useToast();
@@ -13,6 +14,9 @@ export function SettingsForm() {
   const [autoStart, setAutoStart] = useState(true);
   const [keychainAvailable, setKeychainAvailable] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
+  const [appVersion, setAppVersion] = useState('...');
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -21,12 +25,35 @@ export function SettingsForm() {
   async function loadSettings() {
     try {
       const config = await fetchConfig();
-      // Port would come from config if we stored it; default to 3456
       setPort('3456');
-      setKeychainAvailable(true); // Assume available; could check via API
+      setKeychainAvailable(true);
+      // Read version from health endpoint
+      try {
+        const health = await fetch('http://localhost:3456/health').then(r => r.json());
+        if (health.version) setAppVersion(health.version);
+      } catch {}
     } catch {
       setKeychainAvailable(false);
     }
+  }
+
+  async function handleCheckUpdates() {
+    setCheckingUpdate(true);
+    setUpdateStatus('Checking...');
+    try {
+      const result = await checkForUpdates();
+      if (result.available) {
+        setUpdateStatus(`Updated to v${result.version}!`);
+        toast(`Updated to v${result.version}!`, 'success');
+      } else {
+        setUpdateStatus('Up to date');
+        toast('Already up to date', 'success');
+      }
+    } catch {
+      setUpdateStatus('Check failed');
+      toast('Update check failed', 'error');
+    }
+    setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
   }
 
   async function handleSave() {
@@ -88,10 +115,23 @@ export function SettingsForm() {
 
       {/* About */}
       <Card title="About">
-        <p className="text-body">ClaudeCode Proxy v0.1.0</p>
+        <p className="text-body">ClaudeCode Proxy v{appVersion}</p>
         <p className="text-small text-muted mt-xs">
           Route Claude Code requests through the provider offering the best quality/cost ratio.
         </p>
+        <div className="mt-md pt-md border-t border-hairline">
+          <button
+            onClick={handleCheckUpdates}
+            disabled={checkingUpdate}
+            className="inline-flex items-center gap-xs text-small text-primary hover:text-primary-active font-medium focus-ring rounded px-1 py-0.5 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${checkingUpdate ? 'animate-spin' : ''}`} />
+            {checkingUpdate ? 'Checking...' : 'Check for Updates'}
+          </button>
+          {updateStatus && (
+            <span className="ml-sm text-small text-muted">{updateStatus}</span>
+          )}
+        </div>
       </Card>
 
       <Button
