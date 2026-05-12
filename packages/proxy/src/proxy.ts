@@ -186,8 +186,8 @@ export async function handleProxyRequest(
       (req as any)._retryAttempt = retryAttempt;
     }
 
-    // 7. Check if client wants streaming
-    const wantsStream = body.stream !== false;
+    // 7. Check if client wants streaming (only true = streaming; absent/false = JSON)
+    const wantsStream = body.stream === true;
 
     // 8. Transform and stream response (provider SSE → Anthropic SSE)
     if (wantsStream) {
