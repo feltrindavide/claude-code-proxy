@@ -23,30 +23,36 @@ import { getUserFacingErrorMessage } from './services/sse-transformer.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 
 /**
- * Emit an Anthropic-compatible error SSE event and end the response
- * Per D-26: Anthropic error format
+ * Emit an error response in the appropriate format (SSE or JSON)
+ * Per D-26: Anthropic-compatible error format
  * Per D-28: User-friendly message, full error logged internally
  */
-function emitAnthropicError(res: Response, error: unknown): void {
+function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean): void {
   // Log full error internally (without API keys — getUserFacingErrorMessage sanitizes)
   console.error('[Proxy] Upstream error:', error);
-
-  // Set SSE headers
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
 
   // Get sanitized user-friendly message
   const userFriendlyMessage = getUserFacingErrorMessage(error);
 
-  // Write Anthropic-format error event
-  res.write(
-    `event: error\ndata: ${JSON.stringify({
+  if (wantsStream) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.write(
+      `event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: userFriendlyMessage },
+      })}\n\n`,
+    );
+  } else {
+    res.setHeader('Content-Type', 'application/json');
+    res.json({
       type: 'error',
       error: { type: 'api_error', message: userFriendlyMessage },
-    })}\n\n`,
-  );
+    });
+    return; // res.json() ends the response
+  }
   res.end();
 }
 
@@ -93,6 +99,7 @@ export async function handleProxyRequest(
     return emitAnthropicError(
       res,
       `No route configured for model: ${modelName}`,
+      body.stream === true,
     );
   }
 
@@ -109,6 +116,7 @@ export async function handleProxyRequest(
     return emitAnthropicError(
       res,
       `API key not found for provider: ${resolution.provider.name}`,
+      body.stream === true,
     );
   }
 
@@ -188,6 +196,7 @@ export async function handleProxyRequest(
 
     // 7. Check if client wants streaming (only true = streaming; absent/false = JSON)
     const wantsStream = body.stream === true;
+    (res as any)._wantsStream = wantsStream;
 
     // 8. Transform and stream response (provider SSE → Anthropic SSE)
     if (wantsStream) {
@@ -286,7 +295,7 @@ export async function handleProxyRequest(
       });
     }
   } catch (error) {
-    emitAnthropicError(res, error);
+    emitAnthropicError(res, error, (res as any)._wantsStream);
   }
 }
 
