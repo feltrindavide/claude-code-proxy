@@ -62,7 +62,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
     const decoder = new TextDecoder();
     let buffer = '';
     const events: string[] = [];
-    let skipBlock = false;
+    let inThinking = false;
     let eos = false;
 
     const parser = createParser({
@@ -73,23 +73,44 @@ export class OpenRouterAdapter implements ProviderAdapter {
         try {
           const parsed = JSON.parse(event.data);
           
+          // Convert thinking blocks to text blocks
           if (parsed.type === 'content_block_start') {
             const blockType = parsed.content_block?.type;
             if (blockType === 'thinking' || blockType === 'redacted_thinking') {
-              skipBlock = true;
+              inThinking = true;
+              // Rewrite as text block
+              const rewritten = {
+                ...parsed,
+                content_block: { type: 'text', text: parsed.content_block?.thinking || '' }
+              };
+              const eventType = event.event || 'message';
+              events.push(`event: ${eventType}\ndata: ${JSON.stringify(rewritten)}\n\n`);
               return;
             }
-            skipBlock = false;
+            inThinking = false;
           }
           
-          if (skipBlock) {
-            if (parsed.type === 'content_block_stop') {
-              skipBlock = false;
+          // Convert thinking deltas to text deltas
+          if (inThinking && parsed.type === 'content_block_delta') {
+            if (parsed.delta?.type === 'thinking_delta') {
+              const rewritten = {
+                ...parsed,
+                delta: { type: 'text_delta', text: parsed.delta.thinking || '' }
+              };
+              const eventType = event.event || 'message';
+              events.push(`event: ${eventType}\ndata: ${JSON.stringify(rewritten)}\n\n`);
+              return;
             }
-            return;
+            // Skip non-thinking deltas during thinking block (e.g. signature_delta)
+            if (parsed.delta?.type === 'signature_delta') return;
+          }
+          
+          if (inThinking && parsed.type === 'content_block_stop') {
+            inThinking = false;
+            // Pass through content_block_stop (the client sees a text block stop)
           }
         } catch {
-          if (skipBlock) return;
+          if (inThinking) return;
         }
 
         const eventType = event.event || 'message';
