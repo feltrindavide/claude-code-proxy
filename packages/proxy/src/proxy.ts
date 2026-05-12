@@ -295,8 +295,67 @@ export async function handleProxyRequest(
       });
     }
   } catch (error) {
-    emitAnthropicError(res, error, (res as any)._wantsStream);
+    // Instead of emitting an error event (which Claude Code can't parse),
+    // return a valid text response with the error message.
+    // This way Claude Code always gets a parsable response.
+    const errMsg = getUserFacingErrorMessage(error);
+    const isStream = (res as any)._wantsStream;
+
+    if (isStream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      emitSSEEvent(res, 'message_start', {
+        type: 'message_start',
+        message: {
+          id: `msg_${crypto.randomUUID()}`,
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: body.model,
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 0, output_tokens: 1 },
+        },
+      });
+      emitSSEEvent(res, 'content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      });
+      emitSSEEvent(res, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: errMsg },
+      });
+      emitSSEEvent(res, 'content_block_stop', {
+        type: 'content_block_stop',
+        index: 0,
+      });
+      emitSSEEvent(res, 'message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(errMsg.length / 4)) },
+      });
+      emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
+      res.end();
+    } else {
+      res.setHeader('Content-Type', 'application/json');
+      res.json({
+        id: `msg_${crypto.randomUUID()}`,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: errMsg }],
+        model: body.model,
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(errMsg.length / 4)) },
+      });
+    }
   }
+}
+
+function emitSSEEvent(res: Response, eventType: string, data: Record<string, unknown>): void {
+  res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 export { emitAnthropicError };
