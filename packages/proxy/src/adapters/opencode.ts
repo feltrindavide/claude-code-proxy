@@ -206,6 +206,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
 
     const sse = new SSEBuilder(options.messageId, options.model, options.inputTokens);
+    let totalThinkingContent = '';
+    let hasTextOrTool = false;
     yield sse.message_start();
 
     try {
@@ -238,8 +240,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
         const finishReason = choice.finish_reason as string | null | undefined;
 
         // Handle reasoning/thinking content (OpenAI extended thinking format)
+        // Some models (DeepSeek) emit reasoning_content instead of content.
+        // We emit it as thinking blocks AND also buffer it as text fallback
+        // for models that ONLY emit reasoning (no separate content/tool_calls).
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
+          // Buffer for fallback text emission
+          totalThinkingContent += reasoningContent;
           // Close any open tool block before starting thinking block
           for (const evt of sse['blocks'].closeOpenToolBlock()) {
             yield evt;
@@ -252,6 +259,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
         // Handle text content deltas
         if (delta?.content) {
+          hasTextOrTool = true;
           for (const evt of sse.ensureTextBlock()) {
             yield evt;
           }
@@ -260,6 +268,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
         // Handle tool call deltas
         if (delta?.tool_calls && delta.tool_calls.length > 0) {
+          hasTextOrTool = true;
           for (const tc of delta.tool_calls) {
             if (tc.id) {
               // Close previous tool block (if any) before starting a new one
@@ -298,6 +307,13 @@ export class OpenCodeAdapter implements ProviderAdapter {
         if (finishReason) {
           for (const evt of sse.closeContentBlocks()) {
             yield evt;
+          }
+          // If model only emitted reasoning (no text/tool_use), fall back to text
+          if (!hasTextOrTool && totalThinkingContent) {
+            for (const evt of sse.ensureTextBlock()) {
+              yield evt;
+            }
+            yield sse.emitTextDelta(totalThinkingContent);
           }
           yield sse.message_delta(mapStopReason(finishReason), 0);
           yield sse.message_stop();

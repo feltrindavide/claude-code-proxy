@@ -203,6 +203,8 @@ export class CustomAdapter implements ProviderAdapter {
     }
 
     const sse = new SSEBuilder(options.messageId, options.model, options.inputTokens);
+    let totalThinkingContent = '';
+    let hasTextOrTool = false;
     yield sse.message_start();
 
     try {
@@ -237,6 +239,7 @@ export class CustomAdapter implements ProviderAdapter {
         // Handle reasoning/thinking content (OpenAI extended thinking format)
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
+          totalThinkingContent += reasoningContent;
           for (const evt of sse['blocks'].closeOpenToolBlock()) {
             yield evt;
           }
@@ -248,6 +251,7 @@ export class CustomAdapter implements ProviderAdapter {
 
         // Handle text content deltas
         if (delta?.content) {
+          hasTextOrTool = true;
           for (const evt of sse.ensureTextBlock()) {
             yield evt;
           }
@@ -256,6 +260,7 @@ export class CustomAdapter implements ProviderAdapter {
 
         // Handle tool call deltas
         if (delta?.tool_calls && delta.tool_calls.length > 0) {
+          hasTextOrTool = true;
           for (const tc of delta.tool_calls) {
             if (tc.id) {
               // Close previous tool block (if any) before starting a new one
