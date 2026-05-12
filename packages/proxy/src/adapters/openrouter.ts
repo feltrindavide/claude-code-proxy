@@ -46,8 +46,8 @@ export class OpenRouterAdapter implements ProviderAdapter {
   /**
    * OpenRouter returns native Anthropic SSE — pass through with filtering:
    * - [DONE] events removed
-   * - thinking content blocks removed (some models emit only thinking, no text)
-   * - extra fields in message_start cleaned up
+   * - thinking/redacted_thinking content blocks removed
+   * - errors caught and converted to graceful SSE error events
    */
   async *transformResponse(
     upstreamResponse: Response,
@@ -62,15 +62,14 @@ export class OpenRouterAdapter implements ProviderAdapter {
     const decoder = new TextDecoder();
     let buffer = '';
     const events: string[] = [];
-
     let skipBlock = false;
+    let eos = false;
 
     const parser = createParser({
       onEvent: (event: EventSourceMessage) => {
+        if (eos) return;
         if (event.data === '[DONE]') return;
 
-        // Track thinking/redacted_thinking blocks and skip them entirely
-        // (including their deltas and stop events)
         try {
           const parsed = JSON.parse(event.data);
           
@@ -80,18 +79,16 @@ export class OpenRouterAdapter implements ProviderAdapter {
               skipBlock = true;
               return;
             }
-            skipBlock = false; // New block starts: stop skipping
+            skipBlock = false;
           }
           
           if (skipBlock) {
-            // Stop skipping when the filtered block ends
             if (parsed.type === 'content_block_stop') {
               skipBlock = false;
             }
             return;
           }
         } catch {
-          // If JSON parsing fails, check if we're in skip mode
           if (skipBlock) return;
         }
 
@@ -100,23 +97,30 @@ export class OpenRouterAdapter implements ProviderAdapter {
       },
     });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (buffer.trim()) {
-          parser.feed(buffer);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) {
+            parser.feed(buffer);
+          }
+          for (const evt of events.splice(0)) {
+            yield evt;
+          }
+          break;
         }
+        buffer += decoder.decode(value, { stream: true });
+        parser.feed(buffer);
+        buffer = '';
         for (const evt of events.splice(0)) {
           yield evt;
         }
-        break;
       }
-      buffer += decoder.decode(value, { stream: true });
-      parser.feed(buffer);
-      buffer = '';
-      for (const evt of events.splice(0)) {
-        yield evt;
-      }
+    } catch (error) {
+      // Mid-stream error: emit graceful error event
+      eos = true;
+      const msg = error instanceof Error ? error.message : 'Stream error';
+      yield this.emitError(`OpenRouter stream error: ${msg}`);
     }
   }
 

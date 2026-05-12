@@ -59,30 +59,34 @@ export class OllamaAdapter implements ProviderAdapter {
 
     const parser = createParser({
       onEvent: (event: EventSourceMessage) => {
-        // Filter out terminal noise events
         if (event.data === '[DONE]') return;
         const eventType = event.event || 'message';
         events.push(`event: ${eventType}\ndata: ${event.data}\n\n`);
       },
     });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (buffer.trim()) {
-          parser.feed(buffer);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (buffer.trim()) {
+            parser.feed(buffer);
+          }
+          for (const evt of events.splice(0)) {
+            yield evt;
+          }
+          break;
         }
+        buffer += decoder.decode(value, { stream: true });
+        parser.feed(buffer);
+        buffer = '';
         for (const evt of events.splice(0)) {
           yield evt;
         }
-        break;
       }
-      buffer += decoder.decode(value, { stream: true });
-      parser.feed(buffer);
-      buffer = '';
-      for (const evt of events.splice(0)) {
-        yield evt;
-      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Stream error';
+      yield this.emitError(`Ollama stream error: ${msg}`);
     }
   }
 

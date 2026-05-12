@@ -233,6 +233,8 @@ export async function handleProxyRequest(
           const parsed = JSON.parse(dataMatch[1]);
           if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
             contentText += parsed.delta.text || '';
+          } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta') {
+            contentText += parsed.delta.thinking || '';
           } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'input_json_delta') {
             toolUseInput += parsed.delta.partial_json || '';
           } else if (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use') {
