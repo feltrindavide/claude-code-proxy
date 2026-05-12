@@ -47,18 +47,28 @@ export class CustomAdapter implements ProviderAdapter {
   ): Record<string, unknown> {
     const messages: Record<string, unknown>[] = [];
 
+    let deferredText: string | null = null;
+
     for (const msg of body.messages) {
       if (msg.role === 'assistant') {
+        // Assistant messages: extract text content + tool_calls
         let textContent = '';
         const toolCalls: Array<Record<string, unknown>> = [];
+        let foundToolUse = false;
 
         if (typeof msg.content === 'string') {
           textContent = msg.content;
         } else if (Array.isArray(msg.content)) {
           for (const block of msg.content) {
             if (block.type === 'text') {
-              textContent += block.text ?? '';
+              if (foundToolUse || deferredText !== null) {
+                // Text after a tool_use block → defer to separate assistant msg
+                deferredText = (deferredText ?? '') + (block.text ?? '');
+              } else {
+                textContent += block.text ?? '';
+              }
             } else if (block.type === 'tool_use') {
+              foundToolUse = true;
               toolCalls.push({
                 id: block.id,
                 type: 'function',
@@ -67,6 +77,17 @@ export class CustomAdapter implements ProviderAdapter {
                   arguments: JSON.stringify(block.input ?? {}),
                 },
               });
+            } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
+              // Thinking blocks: wrap in <think> tags for OpenAI-compatible providers
+              if (block.type === 'thinking' && block.thinking) {
+                const thinkContent = block.thinking;
+                if (foundToolUse || deferredText !== null) {
+                  deferredText = (deferredText ?? '') + `<think>${thinkContent}</think>`;
+                } else {
+                  textContent += `<think>${thinkContent}</think>`;
+                }
+              }
+              // redacted_thinking: silently dropped
             }
           }
         }
@@ -80,6 +101,12 @@ export class CustomAdapter implements ProviderAdapter {
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
+        // Flush deferred text BEFORE processing user message (it belongs to previous assistant's post-tool text)
+        if (deferredText !== null) {
+          messages.push({ role: 'assistant', content: deferredText });
+          deferredText = null;
+        }
+
         let textContent = '';
         const toolResults: Array<Record<string, unknown>> = [];
 
@@ -111,8 +138,15 @@ export class CustomAdapter implements ProviderAdapter {
           messages.push(tr);
         }
       } else {
+        // Fallback: pass through as-is
         messages.push({ role: msg.role, content: msg.content });
       }
+    }
+
+    // Flush any remaining deferred text at end of message list
+    if (deferredText !== null) {
+      messages.push({ role: 'assistant', content: deferredText });
+      deferredText = null;
     }
 
     const result: Record<string, unknown> = {
@@ -120,6 +154,18 @@ export class CustomAdapter implements ProviderAdapter {
       messages,
       stream: true,
     };
+
+    // Forward system prompt as first system message (Claude Code sends it as top-level field)
+    if (body.system) {
+      const systemText = typeof body.system === 'string'
+        ? body.system
+        : Array.isArray(body.system)
+          ? body.system.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+          : '';
+      if (systemText) {
+        result.messages = [{ role: 'system', content: systemText }, ...messages];
+      }
+    }
 
     if (body.max_tokens !== undefined) {
       result.max_tokens = body.max_tokens;
@@ -188,6 +234,18 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
+        // Handle reasoning/thinking content (OpenAI extended thinking format)
+        const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
+        if (reasoningContent) {
+          for (const evt of sse['blocks'].closeOpenToolBlock()) {
+            yield evt;
+          }
+          for (const evt of sse.ensureThinkingBlock()) {
+            yield evt;
+          }
+          yield sse.emitThinkingDelta(reasoningContent);
+        }
+
         // Handle text content deltas
         if (delta?.content) {
           for (const evt of sse.ensureTextBlock()) {
@@ -200,8 +258,12 @@ export class CustomAdapter implements ProviderAdapter {
         if (delta?.tool_calls && delta.tool_calls.length > 0) {
           for (const tc of delta.tool_calls) {
             if (tc.id) {
+              // Close previous tool block (if any) before starting a new one
+              for (const evt of sse['blocks'].closeOpenToolBlock()) {
+                yield evt;
+              }
               // New tool call — emit content_block_start for tool_use
-              const toolIndex = tc.index ?? sse['blocks'].allocateIndex();
+              const toolIndex = sse['blocks'].startToolBlock(tc.index);
               yield this.formatSSEEvent('content_block_start', {
                 type: 'content_block_start',
                 index: toolIndex,

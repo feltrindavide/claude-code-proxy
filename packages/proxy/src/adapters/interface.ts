@@ -18,6 +18,7 @@ import type { RouteResolution } from '../types/index.js';
 export interface AnthropicMessagesBody {
   model: string;
   messages: Array<{ role: string; content: unknown }>;
+  system?: string | Array<{ type: string; text: string }>;
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
