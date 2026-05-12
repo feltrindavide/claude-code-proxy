@@ -119,11 +119,16 @@ export function ProviderList() {
       <div className="space-y-xs">
         {providers.map((p) => (
           <Card key={p.name} className="flex items-center justify-between">
-            <div className="flex items-center gap-md">
-              <div>
-                <p className="font-heading text-[18px] text-ink">{p.name}</p>
-                <p className="text-small text-muted font-mono">{p.baseUrl}</p>
-              </div>
+              <div className="flex items-center gap-md">
+                <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                  isProviderHealthy(p.name)
+                    ? 'bg-semantic-success'
+                    : 'bg-muted'
+                }`} />
+                <div>
+                  <p className="font-heading text-[18px] text-ink">{p.name}</p>
+                  <p className="text-small text-muted font-mono">{p.baseUrl}</p>
+                </div>
               <span className="bg-surface-strong text-ink text-[11px] font-semibold uppercase tracking-[0.88px] rounded-pill px-[10px] py-xxs">
                 {p.enabled ? 'Enabled' : 'Disabled'}
               </span>

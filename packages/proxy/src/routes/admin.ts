@@ -217,6 +217,13 @@ router.delete('/providers/:id', async (req, res) => {
     // Clean up rate limiter for deleted provider
     rateLimiterService.removeProvider(id);
 
+    // Persist to disk so deletion survives app restart
+    const config = configService.load();
+    config.providers = config.providers.filter(p => p.name !== id);
+    configService.save(config);
+
+    console.log(`[Admin] Provider ${id} deleted and config saved`);
+
     res.json({ success: true });
   } catch (error) {
     console.error('[Admin] Error deleting provider:', error);

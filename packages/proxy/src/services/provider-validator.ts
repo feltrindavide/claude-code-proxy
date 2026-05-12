@@ -43,6 +43,16 @@ export class ProviderValidatorService {
     // Retrieve API key from Keychain
     // Some providers (Ollama) don't need API keys — validate without one
     const apiKey = await getKey(name);
+
+    // Ollama-type providers: skip API key check, just test connectivity
+    if (providerType === 'Ollama' || providerType === 'ollama') {
+      const result = await adapter.validate(baseUrl, apiKey || '').catch(() => ({
+        valid: false,
+        error: 'Could not connect to Ollama server',
+      }));
+      return result;
+    }
+
     if (!apiKey) {
       // Try validating without API key — adapter may support it (e.g., Ollama)
       const result = await adapter.validate(baseUrl, '').catch(() => ({
