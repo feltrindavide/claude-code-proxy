@@ -45,22 +45,75 @@ export class CustomAdapter implements ProviderAdapter {
     body: AnthropicMessagesBody,
     route: RouteResolution,
   ): Record<string, unknown> {
-    const messages = body.messages.map((msg) => {
-      const content =
-        typeof msg.content === 'string'
-          ? msg.content
-          : Array.isArray(msg.content)
-            ? msg.content
-                .filter((b: { type?: string }) => b.type === 'text')
-                .map((b: { text?: string }) => b.text ?? '')
-                .join('\n')
-            : '';
+    const messages: Record<string, unknown>[] = [];
 
-      return {
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content,
-      };
-    });
+    for (const msg of body.messages) {
+      if (msg.role === 'assistant') {
+        let textContent = '';
+        const toolCalls: Array<Record<string, unknown>> = [];
+
+        if (typeof msg.content === 'string') {
+          textContent = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          for (const block of msg.content) {
+            if (block.type === 'text') {
+              textContent += block.text ?? '';
+            } else if (block.type === 'tool_use') {
+              toolCalls.push({
+                id: block.id,
+                type: 'function',
+                function: {
+                  name: block.name,
+                  arguments: JSON.stringify(block.input ?? {}),
+                },
+              });
+            }
+          }
+        }
+
+        const assistantMsg: Record<string, unknown> = {
+          role: 'assistant',
+          content: textContent,
+        };
+        if (toolCalls.length > 0) {
+          assistantMsg.tool_calls = toolCalls;
+        }
+        messages.push(assistantMsg);
+      } else if (msg.role === 'user') {
+        let textContent = '';
+        const toolResults: Array<Record<string, unknown>> = [];
+
+        if (typeof msg.content === 'string') {
+          textContent = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          for (const block of msg.content) {
+            if (block.type === 'text') {
+              textContent += block.text ?? '';
+            } else if (block.type === 'tool_result') {
+              const resultContent = typeof block.content === 'string'
+                ? block.content
+                : Array.isArray(block.content)
+                  ? block.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+                  : '';
+              toolResults.push({
+                role: 'tool',
+                tool_call_id: block.tool_use_id,
+                content: resultContent,
+              });
+            }
+          }
+        }
+
+        if (textContent) {
+          messages.push({ role: 'user', content: textContent });
+        }
+        for (const tr of toolResults) {
+          messages.push(tr);
+        }
+      } else {
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
 
     const result: Record<string, unknown> = {
       model: route.targetModel,
