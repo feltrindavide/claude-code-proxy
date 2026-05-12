@@ -13,13 +13,12 @@ interface ProviderFormProps {
   onClose: () => void;
 }
 
-const providerTypes = ['OpenRouter', 'OpenCode', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Custom'];
+const providerTypes = ['OpenRouter', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Custom'];
 
 const defaultBaseUrls: Record<string, string> = {
   'OpenRouter': 'https://openrouter.ai/api',
-  'OpenCode': 'https://opencode.ai/zen',
   'OpenCode Zen': 'https://opencode.ai/zen',
-  'OpenCode Go': 'https://opencode.ai/go',
+  'OpenCode Go': 'https://opencode.ai/zen/go',
   'Ollama': 'http://localhost:11434',
   'Custom': '',
 };
@@ -62,7 +61,6 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   function getInternalProviderType(displayType: string): string {
     const map: Record<string, string> = {
       'OpenRouter': 'OpenRouter',
-      'OpenCode': 'opencode',
       'OpenCode Zen': 'opencode-zen',
       'OpenCode Go': 'opencode-go',
       'Ollama': 'Ollama',
