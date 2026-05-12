@@ -70,6 +70,9 @@ export class ContentBlockManager {
   /** Ensure a text content block has been started; returns events to emit if it wasn't */
   ensureTextBlock(): string[] {
     const events: string[] = [];
+    // Close any open thinking or tool block before starting text
+    for (const evt of this.closeOpenThinkingBlock()) { events.push(evt); }
+    for (const evt of this.closeOpenToolBlock()) { events.push(evt); }
     if (!this.textStarted) {
       events.push(this.startTextBlock());
     }
@@ -90,15 +93,31 @@ export class ContentBlockManager {
   /** Ensure a thinking content block has been started; returns events to emit if it wasn't */
   ensureThinkingBlock(): string[] {
     const events: string[] = [];
+    // Close any open text or tool block before starting thinking
+    for (const evt of this.closeOpenTextBlock()) { events.push(evt); }
+    for (const evt of this.closeOpenToolBlock()) { events.push(evt); }
     if (!this.thinkingStarted) {
       events.push(this.startThinkingBlock());
     }
     return events;
   }
 
+  /** Close the open text block if any; returns events to emit */
+  closeOpenTextBlock(): string[] {
+    const events: string[] = [];
+    if (this.textStarted) {
+      events.push(formatSSEEvent('content_block_stop', {
+        type: 'content_block_stop',
+        index: this.textIndex,
+      }));
+      this.textStarted = false;
+      this.textIndex = -1;
+    }
+    return events;
+  }
+
   /** Create a content_block_start event for a thinking block */
   private startThinkingBlock(): string {
-    // Close text block if open (thinking can coexist with text in OpenAI but not in Anthropic)
     this.thinkingIndex = this.allocateIndex();
     this.thinkingStarted = true;
     return formatSSEEvent('content_block_start', {
@@ -106,6 +125,20 @@ export class ContentBlockManager {
       index: this.thinkingIndex,
       content_block: { type: 'thinking', thinking: '' },
     });
+  }
+
+  /** Close the open thinking block if any; returns events to emit */
+  closeOpenThinkingBlock(): string[] {
+    const events: string[] = [];
+    if (this.thinkingStarted) {
+      events.push(formatSSEEvent('content_block_stop', {
+        type: 'content_block_stop',
+        index: this.thinkingIndex,
+      }));
+      this.thinkingStarted = false;
+      this.thinkingIndex = -1;
+    }
+    return events;
   }
 
   /** Emit a content_block_delta with thinking_delta */
@@ -120,10 +153,12 @@ export class ContentBlockManager {
 
   /** Register that a tool_use block has started and return its index */
   startToolBlock(index?: number): number {
-    // Close any previous tool block first
-    const events = this.closeOpenToolBlock();
+    // Close any open text/thinking/tool blocks first (Anthropic blocks are sequential)
+    const events = this.closeOpenTextBlock();
+    for (const evt of this.closeOpenThinkingBlock()) { events.push(evt); }
+    for (const evt of this.closeOpenToolBlock()) { events.push(evt); }
     if (events.length > 0) {
-      console.warn('[SSE] Unexpected open tool block when starting new one');
+      console.warn('[SSE] Closed open blocks when starting tool block');
     }
     this.toolIndex = index ?? this.allocateIndex();
     this.toolStarted = true;
@@ -149,27 +184,9 @@ export class ContentBlockManager {
   /** Close any open content blocks — returns events to emit */
   closeContentBlocks(): string[] {
     const events: string[] = [];
-    if (this.textStarted) {
-      events.push(
-        formatSSEEvent('content_block_stop', {
-          type: 'content_block_stop',
-          index: this.textIndex,
-        }),
-      );
-      this.textStarted = false;
-    }
-    if (this.thinkingStarted) {
-      events.push(
-        formatSSEEvent('content_block_stop', {
-          type: 'content_block_stop',
-          index: this.thinkingIndex,
-        }),
-      );
-      this.thinkingStarted = false;
-    }
-    for (const evt of this.closeOpenToolBlock()) {
-      events.push(evt);
-    }
+    for (const evt of this.closeOpenTextBlock()) { events.push(evt); }
+    for (const evt of this.closeOpenThinkingBlock()) { events.push(evt); }
+    for (const evt of this.closeOpenToolBlock()) { events.push(evt); }
     return events;
   }
 }
@@ -235,6 +252,26 @@ export class SSEBuilder {
   /** Ensure thinking block is open; returns events array (may be empty) */
   ensureThinkingBlock(): string[] {
     return this.blocks.ensureThinkingBlock();
+  }
+
+  /** Close open text block; returns events array */
+  closeOpenTextBlock(): string[] {
+    return this.blocks.closeOpenTextBlock();
+  }
+
+  /** Close open thinking block; returns events array */
+  closeOpenThinkingBlock(): string[] {
+    return this.blocks.closeOpenThinkingBlock();
+  }
+
+  /** Close open tool_use block; returns events array */
+  closeOpenToolBlock(): string[] {
+    return this.blocks.closeOpenToolBlock();
+  }
+
+  /** Start a tool block and return its index */
+  startToolBlock(index?: number): number {
+    return this.blocks.startToolBlock(index);
   }
 
   /** Emit a content_block_delta with text_delta */

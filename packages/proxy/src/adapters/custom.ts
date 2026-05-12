@@ -278,11 +278,11 @@ export class CustomAdapter implements ProviderAdapter {
           for (const tc of delta.tool_calls) {
             if (tc.id) {
               // Close previous tool block (if any) before starting a new one
-              for (const evt of sse['blocks'].closeOpenToolBlock()) {
+              for (const evt of sse.closeOpenToolBlock()) {
                 yield evt;
               }
               // New tool call — emit content_block_start for tool_use
-              const toolIndex = sse['blocks'].startToolBlock(tc.index);
+              const toolIndex = sse.startToolBlock(tc.index);
               yield this.formatSSEEvent('content_block_start', {
                 type: 'content_block_start',
                 index: toolIndex,
