@@ -61,4 +61,4 @@ registerAdapter(new (class extends OpenCodeAdapter {
   readonly providerType = 'opencode-go';
 })());
 // Custom Anthropic format (passthrough like OpenRouter)
-registerAdapter(new CustomAdapter({ apiFormat: 'anthropic' }));
+registerAdapter(new CustomAdapter({ apiFormat: 'anthropic', providerType: 'custom-anthropic' }));
