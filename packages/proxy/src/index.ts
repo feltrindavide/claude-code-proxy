@@ -31,6 +31,24 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '32mb' }));
 
+// Try to read app version from bundled package.json (production) or proxy package.json (dev)
+let APP_VERSION = '1.0.0';
+try {
+  const pkgPaths = [
+    path.join(__dirname, '../package.json'),      // CJS bundle: proxy-bundle/package.json
+    path.join(__dirname, '../../package.json'),   // dev tsx: packages/proxy/package.json → root
+  ];
+  for (const p of pkgPaths) {
+    if (fs.existsSync(p)) {
+      const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (pkg.version) {
+        APP_VERSION = pkg.version;
+        break;
+      }
+    }
+  }
+} catch {}
+
 // Mount admin API routes (D-05)
 app.use('/admin', adminRouter);
 
@@ -39,7 +57,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     port: DEFAULT_PORT,
-    version: '1.0.0',
+    version: APP_VERSION,
   });
 });
 

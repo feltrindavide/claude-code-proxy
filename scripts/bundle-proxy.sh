@@ -27,8 +27,10 @@ else
   echo ">>> WARNING: Frontend build not found at $WEB_OUT. Run 'npm run build' first."
 fi
 
-# Package type
-echo '{"type":"commonjs","name":"proxy-bundle"}' > "$BUNDLE_DIR/package.json"
+# Package type with version from Tauri config
+VERSION=$(node -e "console.log(require('./src-tauri/tauri.conf.json').version || '0.1.0')")
+echo "{\"type\":\"commonjs\",\"name\":\"proxy-bundle\",\"version\":\"$VERSION\"}" > "$BUNDLE_DIR/package.json"
+echo ">>> Bundle version: $VERSION"
 
 echo ">>> Proxy bundle ready ($(du -sh $BUNDLE_DIR | cut -f1))"
 ls -lh "$BUNDLE_DIR/dist/index.cjs"
