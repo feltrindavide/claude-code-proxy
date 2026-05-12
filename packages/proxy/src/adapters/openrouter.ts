@@ -63,17 +63,36 @@ export class OpenRouterAdapter implements ProviderAdapter {
     let buffer = '';
     const events: string[] = [];
 
+    let skipBlock = false;
+
     const parser = createParser({
       onEvent: (event: EventSourceMessage) => {
         if (event.data === '[DONE]') return;
 
-        // Skip thinking/redacted_thinking content blocks and their deltas
-        // These are internal reasoning that Claude Code can't use
-        if (event.data.includes('"thinking"') || 
-            event.data.includes('"thinking_delta"') ||
-            event.data.includes('"redacted_thinking"') ||
-            event.data.includes('"signature"')) {
-          return;
+        // Track thinking/redacted_thinking blocks and skip them entirely
+        // (including their deltas and stop events)
+        try {
+          const parsed = JSON.parse(event.data);
+          
+          if (parsed.type === 'content_block_start') {
+            const blockType = parsed.content_block?.type;
+            if (blockType === 'thinking' || blockType === 'redacted_thinking') {
+              skipBlock = true;
+              return;
+            }
+            skipBlock = false; // New block starts: stop skipping
+          }
+          
+          if (skipBlock) {
+            // Stop skipping when the filtered block ends
+            if (parsed.type === 'content_block_stop') {
+              skipBlock = false;
+            }
+            return;
+          }
+        } catch {
+          // If JSON parsing fails, check if we're in skip mode
+          if (skipBlock) return;
         }
 
         const eventType = event.event || 'message';
