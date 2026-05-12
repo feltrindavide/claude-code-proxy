@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchConfig } from '@/lib/api';
-import { checkForUpdates } from '@/services/updater';
+import { checkForUpdates, openDownloadPage } from '@/services/updater';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -37,23 +37,28 @@ export function SettingsForm() {
     }
   }
 
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+
   async function handleCheckUpdates() {
     setCheckingUpdate(true);
     setUpdateStatus('Checking...');
+    setUpdateAvailable(null);
     try {
       const result = await checkForUpdates();
       if (result.available) {
-        setUpdateStatus(`Updated to v${result.version}!`);
-        toast(`Updated to v${result.version}!`, 'success');
+        setUpdateStatus(`v${result.version} available!`);
+        setUpdateAvailable(result.version!);
+        toast(`v${result.version} available!`, 'success');
       } else {
-        setUpdateStatus('Up to date');
-        toast('Already up to date', 'success');
+        setUpdateStatus(`✓ v${appVersion} is up to date`);
+        setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
       }
-    } catch {
-      setUpdateStatus('Check failed');
-      toast('Update check failed', 'error');
+    } catch (e: any) {
+      const msg = e?.message || 'Unknown error';
+      setUpdateStatus(`✗ Check failed: ${msg}`);
+      setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
+      console.error('[Update]', e);
     }
-    setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
   }
 
   async function handleSave() {
@@ -130,6 +135,14 @@ export function SettingsForm() {
           </button>
           {updateStatus && (
             <span className="ml-sm text-small text-muted">{updateStatus}</span>
+          )}
+          {updateAvailable && (
+            <button
+              onClick={() => { openDownloadPage(); setUpdateAvailable(null); setUpdateStatus(null); }}
+              className="ml-sm inline-flex items-center gap-xs text-small font-medium text-primary hover:text-primary-active underline"
+            >
+              Download v{updateAvailable}
+            </button>
           )}
         </div>
       </Card>

@@ -1,34 +1,35 @@
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+const UPDATE_URL = 'https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json';
+const RELEASES_URL = 'https://github.com/feltrindavide/claude-code-proxy/releases/latest';
 
 export async function checkForUpdates(): Promise<{ available: boolean; version?: string }> {
   try {
-    const update = await check();
+    const resp = await fetch(UPDATE_URL);
+    const data = await resp.json();
+    const latestVersion = data.version;
 
-    if (update) {
-      console.log(`Update available: ${update.version}`);
+    // Read current version from health endpoint
+    const healthResp = await fetch('http://localhost:3456/health');
+    const health = await healthResp.json();
+    const currentVersion = health.version || '0.0.0';
 
-      await update.downloadAndInstall((event) => {
-        switch (event.event) {
-          case 'Started':
-            console.log(`Downloading ${event.data.contentLength} bytes...`);
-            break;
-          case 'Progress':
-            console.log(`Downloaded ${event.data.chunkLength} bytes`);
-            break;
-          case 'Finished':
-            console.log('Download complete!');
-            break;
-        }
-      });
+    console.log(`[Update] Current: ${currentVersion}, Latest: ${latestVersion}`);
 
-      await relaunch();
-      return { available: true, version: update.version };
+    if (latestVersion > currentVersion) {
+      return { available: true, version: latestVersion };
     }
 
     return { available: false };
   } catch (error) {
-    console.error('Update check failed:', error);
+    console.error('[Update] Check failed:', error);
     return { available: false };
+  }
+}
+
+export function openDownloadPage(): void {
+  const tauri = (window as any).__TAURI__;
+  if (tauri?.shell?.open) {
+    tauri.shell.open(RELEASES_URL);
+  } else {
+    window.open(RELEASES_URL, '_blank');
   }
 }
