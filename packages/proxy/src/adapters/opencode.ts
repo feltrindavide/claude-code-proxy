@@ -31,6 +31,7 @@ import {
   mapStopReason,
   getUserFacingErrorMessage,
 } from '../services/sse-transformer.js';
+import { ThinkTagParser, HeuristicToolParser } from '../services/response-parsers.js';
 
 export class OpenCodeAdapter implements ProviderAdapter {
   readonly providerType: string = 'opencode';
@@ -179,6 +180,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
     // OpenAI format: convert OpenAI SSE → Anthropic SSE
     const sse = new SSEBuilder(options.messageId, options.model, options.inputTokens);
+    const thinkParser = new ThinkTagParser();
+    const heuristicParser = new HeuristicToolParser();
     yield sse.message_start();
 
     try {
@@ -220,12 +223,25 @@ export class OpenCodeAdapter implements ProviderAdapter {
           yield sse.emitThinkingDelta(reasoningContent);
         }
 
-        // Handle text content deltas
+        // Handle text content deltas (with think tag and heuristic tool parsing)
         if (delta?.content) {
-          for (const evt of sse.ensureTextBlock()) {
-            yield evt;
+          // Parse content through heuristic parsers for edge cases
+          for (const chunk of thinkParser.feed(delta.content)) {
+            if (chunk.type === 'thinking') {
+              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+              yield sse.emitThinkingDelta(chunk.content);
+            } else {
+              const { cleanText, tools } = heuristicParser.feed(chunk.content);
+              if (cleanText) {
+                for (const evt of sse.ensureTextBlock()) { yield evt; }
+                yield sse.emitTextDelta(cleanText);
+              }
+              for (const tool of tools) {
+                for (const evt of sse.ensureTextBlock()) { yield evt; }
+                yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+              }
+            }
           }
-          yield sse.emitTextDelta(delta.content);
         }
 
         // Handle tool call deltas
@@ -266,6 +282,24 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
         // Handle finish_reason — close stream
         if (finishReason) {
+          // Flush any remaining heuristic content
+          const flushedThink = thinkParser.flush();
+          if (flushedThink) {
+            if (flushedThink.type === 'thinking') {
+              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+              yield sse.emitThinkingDelta(flushedThink.content);
+            } else {
+              const { cleanText, tools } = heuristicParser.flush();
+              if (cleanText) {
+                for (const evt of sse.ensureTextBlock()) { yield evt; }
+                yield sse.emitTextDelta(cleanText);
+              }
+              for (const tool of tools) {
+                for (const evt of sse.ensureTextBlock()) { yield evt; }
+                yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+              }
+            }
+          }
           for (const evt of sse.closeContentBlocks()) {
             yield evt;
           }
