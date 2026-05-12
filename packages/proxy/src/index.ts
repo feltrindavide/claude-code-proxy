@@ -254,8 +254,8 @@ if (fs.existsSync(webDir)) {
 app.get('/update-check', async (_req, res) => {
   try {
     const resp = await fetch('https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json');
-    const data = await resp.json();
-    res.json({ version: data.version });
+    const data = await resp.json() as { version?: string };
+    res.json({ version: data?.version || 'unknown' });
   } catch {
     res.status(502).json({ error: 'Failed to check for updates' });
   }

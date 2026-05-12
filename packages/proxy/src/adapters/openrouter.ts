@@ -28,6 +28,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
   readonly apiPath = '/v1/messages';
   timeouts = { streaming: 120_000, nonStreaming: 30_000 };
 
+
   /**
    * OpenRouter supports native Anthropic endpoint — passthrough with stream flag
    */
@@ -43,7 +44,10 @@ export class OpenRouterAdapter implements ProviderAdapter {
   }
 
   /**
-   * OpenRouter returns native Anthropic SSE — pass through with [DONE] filtering
+   * OpenRouter returns native Anthropic SSE — pass through with filtering:
+   * - [DONE] events removed
+   * - thinking content blocks removed (some models emit only thinking, no text)
+   * - extra fields in message_start cleaned up
    */
   async *transformResponse(
     upstreamResponse: Response,
@@ -61,8 +65,17 @@ export class OpenRouterAdapter implements ProviderAdapter {
 
     const parser = createParser({
       onEvent: (event: EventSourceMessage) => {
-        // Filter out terminal noise events
         if (event.data === '[DONE]') return;
+
+        // Skip thinking/redacted_thinking content blocks and their deltas
+        // These are internal reasoning that Claude Code can't use
+        if (event.data.includes('"thinking"') || 
+            event.data.includes('"thinking_delta"') ||
+            event.data.includes('"redacted_thinking"') ||
+            event.data.includes('"signature"')) {
+          return;
+        }
+
         const eventType = event.event || 'message';
         events.push(`event: ${eventType}\ndata: ${event.data}\n\n`);
       },
