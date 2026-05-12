@@ -17,7 +17,7 @@
         "label": "popup",
         "url": "/popup",
         "width": 350,
-        "height": 380,
+        "height": 460,
         "visible": false,
         "center": false,
         "resizable": false,
