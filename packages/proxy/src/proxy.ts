@@ -123,6 +123,25 @@ export async function handleProxyRequest(
   // 5. Transform request body (Anthropic → provider format)
   const providerBody = adapter.transformRequest(body, resolution);
 
+  // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
+  // These models spend tokens on chain-of-thought before producing a response.
+  // The auto-mode classifier uses small max_tokens (1-50) which gets consumed
+  // entirely by reasoning, leaving no tokens for the actual response.
+  const highReasoningModels = ['deepseek', 'deepseek-r1', 'deepseek-v4'];
+  const needsBoost = highReasoningModels.some(m => 
+    resolution.targetModel.toLowerCase().includes(m)
+  );
+  const originalMaxTokens = (providerBody as any).max_tokens;
+  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens < 200) {
+    // DeepSeek uses chain-of-thought that consumes ~150-500+ tokens.
+    // The auto-mode classifier sends 1-50 tokens which gets entirely consumed
+    // by reasoning, leaving 0 tokens for the actual response.
+    // Only boost for small max_tokens (classifier-style requests).
+    const boosted = 2048;
+    (providerBody as any).max_tokens = boosted;
+    console.log(`[Proxy] Boosted max_tokens from ${originalMaxTokens} to ${boosted} for ${resolution.targetModel} (reasoning overhead)`);
+  }
+
   // 6. Make upstream request with retry (D-66 to D-69)
   let retryAttempt = 0;
 
