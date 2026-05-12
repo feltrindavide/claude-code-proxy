@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fetchConfig } from '@/lib/api';
-import { checkForUpdates, openDownloadPage } from '@/services/updater';
+import { openDownloadPage } from '@/services/updater';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -44,18 +44,31 @@ export function SettingsForm() {
     setUpdateStatus('Checking...');
     setUpdateAvailable(null);
     try {
-      const result = await checkForUpdates();
-      if (result.available) {
-        setUpdateStatus(`v${result.version} available!`);
-        setUpdateAvailable(result.version!);
-        toast(`v${result.version} available!`, 'success');
-      } else {
-        setUpdateStatus(`✓ v${appVersion} is up to date`);
-        setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
+      // Fetch latest version from GitHub
+      const resp = await fetch('https://github.com/feltrindavide/claude-code-proxy/releases/latest/download/latest.json');
+      const data = await resp.json();
+      const latestVer = data.version;
+      console.log('[Update] Latest:', latestVer, 'Current:', appVersion);
+
+      // Parse and compare
+      const parse = (v: string) => v.split('.').map(n => parseInt(n) || 0);
+      const cur = parse(appVersion);
+      const lat = parse(latestVer);
+
+      for (let i = 0; i < Math.max(cur.length, lat.length); i++) {
+        if ((lat[i] || 0) > (cur[i] || 0)) {
+          setUpdateStatus(`v${latestVer} available!`);
+          setUpdateAvailable(latestVer);
+          toast(`v${latestVer} available!`, 'success');
+          return;
+        }
+        if ((lat[i] || 0) < (cur[i] || 0)) break;
       }
+
+      setUpdateStatus(`✓ v${appVersion} is up to date`);
+      setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
     } catch (e: any) {
-      const msg = e?.message || 'Unknown error';
-      setUpdateStatus(`✗ Check failed: ${msg}`);
+      setUpdateStatus(`✗ Check failed: ${e?.message || 'Error'}`);
       setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
       console.error('[Update]', e);
     }
