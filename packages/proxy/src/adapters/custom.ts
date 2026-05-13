@@ -109,11 +109,6 @@ export class CustomAdapter implements ProviderAdapter {
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
-        if (deferredText !== null) {
-          messages.push({ role: 'assistant', content: deferredText });
-          deferredText = null;
-        }
-
         let textContent = '';
         const toolResults: Array<Record<string, unknown>> = [];
 
@@ -143,6 +138,11 @@ export class CustomAdapter implements ProviderAdapter {
         }
         for (const tr of toolResults) {
           messages.push(tr);
+        }
+        // Flush deferred text AFTER tool results (keeps tool results adjacent to tool_calls)
+        if (deferredText !== null) {
+          messages.push({ role: 'assistant', content: deferredText });
+          deferredText = null;
         }
       } else {
         messages.push({ role: msg.role, content: msg.content });

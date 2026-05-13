@@ -95,10 +95,55 @@ export class OpenCodeAdapter implements ProviderAdapter {
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
+        // User messages: extract text content + tool_results
+        let textContent = '';
+        const toolResults: Array<Record<string, unknown>> = [];
+
+        if (typeof msg.content === 'string') {
+          textContent = msg.content;
+        } else if (Array.isArray(msg.content)) {
+          for (const block of msg.content) {
+            if (block.type === 'text') {
+              textContent += block.text ?? '';
+            } else if (block.type === 'tool_result') {
+              const resultContent = typeof block.content === 'string'
+                ? block.content
+                : Array.isArray(block.content)
+                  ? block.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+                  : '';
+              toolResults.push({
+                role: 'tool',
+                tool_call_id: block.tool_use_id,
+                content: resultContent,
+              });
+            }
+          }
+        }
+
+        if (textContent) {
+          messages.push({ role: 'user', content: textContent });
+        }
+        // Append tool result messages after the user message
+        for (const tr of toolResults) {
+          messages.push(tr);
+        }
+        // Flush deferred text AFTER tool results (not before!)
+        // This keeps tool results right after the assistant's tool_calls
         if (deferredText !== null) {
           messages.push({ role: 'assistant', content: deferredText });
           deferredText = null;
         }
+      } else {
+        // Fallback: pass through as-is
+        messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    // Flush any remaining deferred text at end of message list
+    if (deferredText !== null) {
+      messages.push({ role: 'assistant', content: deferredText });
+      deferredText = null;
+    }
 
         let textContent = '';
         const toolResults: Array<Record<string, unknown>> = [];
