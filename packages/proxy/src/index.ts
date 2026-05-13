@@ -9,8 +9,9 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import { handleProxyRequest } from './proxy.js';
+import { handleProxyRequest, lastContextUsage } from './proxy.js';
 import { providerService } from './services/provider.js';
+import { contextRegistry } from './services/context-registry.js';
 import { configService } from './services/config.js';
 import { providerValidatorService } from './services/provider-validator.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
@@ -261,10 +262,39 @@ app.get('/update-check', async (_req, res) => {
   }
 });
 
+// Context tracking endpoint
+app.get('/admin/context', (_req, res) => {
+  const ctx = contextRegistry.load();
+  res.json({ lastUsage: lastContextUsage, config: ctx });
+});
+
+app.put('/admin/context', express.json(), (req, res) => {
+  try {
+    const updates = req.body.models;
+    if (!Array.isArray(updates)) {
+      return res.status(400).json({ error: 'models must be an array' });
+    }
+    const ctx = contextRegistry.load();
+    for (const update of updates) {
+      const existing = ctx.models.find(m => m.id === update.id && m.provider === update.provider);
+      if (existing) {
+        if (update.context) existing.context = update.context;
+        if (update.max_output) existing.max_output = update.max_output;
+      }
+    }
+    contextRegistry.save(ctx);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /**
  * Start the Express server
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
+  // Ensure proxy-context.json esiste
+  contextRegistry.ensureDefaults();
   // Load config and validate providers on startup (01-03: per D-13, MAP-03; 02-03: per D-22)
   await loadConfigOnStartup();
 

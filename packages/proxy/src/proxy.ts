@@ -21,6 +21,7 @@ import { providerService } from './services/provider.js';
 import { getKey } from './services/keychain.js';
 import { getUserFacingErrorMessage } from './services/sse-transformer.js';
 import { fetchWithRetry } from './services/retryHandler.js';
+import { contextRegistry, type LastContextUsage } from './services/context-registry.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -55,6 +56,11 @@ function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean
   }
   res.end();
 }
+
+// Tracciamento ultimo utilizzo contesto
+export let lastContextUsage: LastContextUsage = {
+  inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1,
+};
 
 /**
  * Handle incoming /v1/messages requests
@@ -213,6 +219,9 @@ export async function handleProxyRequest(
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
 
+      // Calcola inflation per token output
+      const inflationFactor = getInflationFactor(resolution);
+
       // Batch writes to reduce overhead from DeepSeek's many tiny reasoning chunks
       const buf: string[] = [];
       for await (const event of adapter.transformResponse(upstreamResponse, {
@@ -220,7 +229,12 @@ export async function handleProxyRequest(
         model: body.model,
         inputTokens: 0,
       })) {
-        buf.push(event);
+        // Applica inflation a message_delta
+        if (inflationFactor !== 1 && event.includes('message_delta')) {
+          buf.push(inflateOutputTokens(event, inflationFactor));
+        } else {
+          buf.push(event);
+        }
         // Flush in batches of 15 events or on message boundaries
         if (buf.length >= 15 || event.includes('message_') || event.includes('"error"')) {
           res.write(buf.join(''));
@@ -229,6 +243,9 @@ export async function handleProxyRequest(
       }
       if (buf.length > 0) res.write(buf.join(''));
       res.end();
+      // Traccia ultimo utilizzo (stima input da body JSON)
+      const inputEst = Math.round(JSON.stringify(body.messages || []).length / 4);
+      updateLastUsage(inputEst, 0, resolution, inflationFactor);
     } else {
       // Non-streaming: accumulate events into a complete JSON response
       res.setHeader('Content-Type', 'application/json');
@@ -291,6 +308,7 @@ export async function handleProxyRequest(
         }
       }
 
+      const outTokens = Math.max(1, Math.round(contentText.length / 4));
       res.json({
         id: `msg_${crypto.randomUUID()}`,
         type: 'message',
@@ -299,8 +317,10 @@ export async function handleProxyRequest(
         model: body.model,
         stop_reason: stopReason,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(contentText.length / 4)) },
+        usage: { input_tokens: 0, output_tokens: outTokens },
       });
+      const inputEst = Math.round(JSON.stringify(body.messages || []).length / 4);
+      updateLastUsage(inputEst, outTokens, resolution, getInflationFactor(resolution));
     }
   } catch (error) {
     // Instead of emitting an error event (which Claude Code can't parse),
@@ -366,4 +386,46 @@ function emitSSEEvent(res: Response, eventType: string, data: Record<string, unk
   res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-export { emitAnthropicError };
+// ---------------------------------------------------------------------------
+// Inflation token per contesto
+// ---------------------------------------------------------------------------
+
+/** Calcola il fattore di inflazione basato sul contesto reale del modello */
+function getInflationFactor(resolution: RouteResolution): number {
+  if (!resolution.claudeTier || !resolution.targetModel) return 1;
+  const claudeCtx = contextRegistry.getClaudeContext(resolution.claudeTier);
+  const modelCtx = contextRegistry.getModelContext(resolution.targetModel, resolution.provider.name);
+  if (!modelCtx) return 1;
+  return claudeCtx / modelCtx.context;
+}
+
+/** Gonfia output_tokens in un evento message_delta */
+function inflateOutputTokens(event: string, factor: number): string {
+  try {
+    const match = event.match(/^data: (.+)$/m);
+    if (!match) return event;
+    const parsed = JSON.parse(match[1]);
+    if (parsed.type === 'message_delta' && parsed.usage?.output_tokens) {
+      parsed.usage.output_tokens = Math.max(1, Math.round(parsed.usage.output_tokens * factor));
+      return `event: message_delta\ndata: ${JSON.stringify(parsed)}\n\n`;
+    }
+  } catch {}
+  return event;
+}
+
+/** Aggiorna il tracciamento ultimo utilizzo */
+function updateLastUsage(
+  inputCount: number, outputCount: number,
+  resolution: RouteResolution, inflation: number,
+): void {
+  lastContextUsage = {
+    inputTokens: inputCount,
+    outputTokens: outputCount,
+    model: resolution.targetModel,
+    provider: resolution.provider.name,
+    tier: resolution.claudeTier || '',
+    inflation,
+  };
+}
+
+export { emitAnthropicError, inflateOutputTokens, getInflationFactor };
