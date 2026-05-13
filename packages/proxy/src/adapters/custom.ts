@@ -287,8 +287,16 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle text content deltas (skip reasoning_content - DeepSeek requires it
-        // to be passed back as structured field, not as text)
+        // Handle reasoning/thinking content — emit as text so the response has content
+        const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
+        if (reasoningContent) {
+          for (const evt of sse.ensureTextBlock()) {
+            yield evt;
+          }
+          yield sse.emitTextDelta(reasoningContent);
+        }
+
+        // Handle text content deltas
         if (delta?.content) {
           for (const evt of sse.ensureTextBlock()) {
             yield evt;

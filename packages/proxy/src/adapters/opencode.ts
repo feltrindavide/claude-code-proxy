@@ -247,9 +247,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle text content deltas (skip reasoning_content - DeepSeek requires it
-        // to be passed back as a structured field, not as text. We drop it to avoid
-        // the 'reasoning_content must be passed back' error.)
+        // Handle reasoning/thinking content — emit as text so the response
+        // has content even with small max_tokens. DeepSeek's reasoning is verbose
+        // but better than empty responses.
+        const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
+        if (reasoningContent) {
+          for (const evt of sse.ensureTextBlock()) {
+            yield evt;
+          }
+          yield sse.emitTextDelta(reasoningContent);
+        }
+
+        // Handle text content deltas
         if (delta?.content) {
           // Parse content through heuristic parsers for edge cases
           for (const chunk of thinkParser.feed(delta.content)) {

@@ -131,6 +131,14 @@ export async function handleProxyRequest(
   // 5. Transform request body (Anthropic → provider format)
   const providerBody = adapter.transformRequest(body, resolution);
 
+  // Debug: check reasoning_content for DeepSeek
+  if (resolution.targetModel?.toLowerCase().includes('deepseek') && Array.isArray(providerBody.messages)) {
+    const hasRC = (providerBody.messages as any[]).filter((m: any) => m.role === 'assistant' && !m.reasoning_content).length;
+    if (hasRC > 0) {
+      console.log(`[Proxy DEBUG] ${hasRC} assistant message(s) missing reasoning_content for DeepSeek!`);
+    }
+  }
+
   // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
   // These models spend tokens on chain-of-thought before producing a response.
   // The auto-mode classifier uses small max_tokens (1-50) which gets consumed
@@ -140,7 +148,7 @@ export async function handleProxyRequest(
     resolution.targetModel.toLowerCase().includes(m)
   );
   const originalMaxTokens = (providerBody as any).max_tokens;
-  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens < 200) {
+  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens <= 200) {
     // DeepSeek uses chain-of-thought that consumes ~150-500+ tokens.
     // The auto-mode classifier sends 1-50 tokens which gets entirely consumed
     // by reasoning, leaving 0 tokens for the actual response.
