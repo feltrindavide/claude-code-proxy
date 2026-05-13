@@ -107,7 +107,7 @@ export class CustomAdapter implements ProviderAdapter {
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
-        // DeepSeek requires reasoning_content to be passed back in follow-up requests
+        // DeepSeek requires reasoning_content in ALL assistant messages
         if (route.targetModel?.toLowerCase().includes('deepseek')) {
           let rc = '';
           if (Array.isArray(msg.content)) {
@@ -115,8 +115,12 @@ export class CustomAdapter implements ProviderAdapter {
               .filter((b: any) => b.type === 'thinking' && b.thinking)
               .map((b: any) => b.thinking).join('');
           }
+          if (!rc && typeof msg.content === 'string') {
+            rc = msg.content;
+          }
           if (!rc && textContent) rc = textContent;
-          if (rc) assistantMsg.reasoning_content = rc;
+          if (!rc) rc = ' ';
+          assistantMsg.reasoning_content = rc;
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {

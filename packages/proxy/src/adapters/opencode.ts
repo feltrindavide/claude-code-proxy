@@ -93,8 +93,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
-        // DeepSeek requires reasoning_content to be passed back in follow-up requests.
-        // Inject it from thinking blocks or text content.
+        // DeepSeek requires reasoning_content in ALL assistant messages once thinking mode is active.
+        // Inject from thinking blocks, text content, or use a non-empty placeholder.
         const isDeepSeek = route.targetModel?.toLowerCase().includes('deepseek');
         if (isDeepSeek) {
           let rc = '';
@@ -103,8 +103,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
               .filter((b: any) => b.type === 'thinking' && b.thinking)
               .map((b: any) => b.thinking).join('');
           }
+          if (!rc && typeof msg.content === 'string') {
+            rc = msg.content;
+          }
           if (!rc && textContent) rc = textContent;
-          if (rc) assistantMsg.reasoning_content = rc;
+          if (!rc) rc = ' '; // Always provide a non-empty value
+          assistantMsg.reasoning_content = rc;
         }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
