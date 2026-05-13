@@ -107,6 +107,17 @@ export class CustomAdapter implements ProviderAdapter {
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
+        // DeepSeek requires reasoning_content to be passed back in follow-up requests
+        if (route.targetModel?.toLowerCase().includes('deepseek')) {
+          let rc = '';
+          if (Array.isArray(msg.content)) {
+            rc = msg.content
+              .filter((b: any) => b.type === 'thinking' && b.thinking)
+              .map((b: any) => b.thinking).join('');
+          }
+          if (!rc && textContent) rc = textContent;
+          if (rc) assistantMsg.reasoning_content = rc;
+        }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
         let textContent = '';
