@@ -120,15 +120,22 @@ export class OpenCodeAdapter implements ProviderAdapter {
           }
         }
 
+        // If there are NO tool results, flush deferred text BEFORE user message
+        // so it stays adjacent to the previous assistant's tool_calls turn.
+        // If there ARE tool results, flush AFTER so tool results follow tool_calls.
+        if (deferredText !== null && toolResults.length === 0) {
+          messages.push({ role: 'assistant', content: deferredText });
+          deferredText = null;
+        }
+
         if (textContent) {
           messages.push({ role: 'user', content: textContent });
         }
-        // Append tool result messages after the user message
         for (const tr of toolResults) {
           messages.push(tr);
         }
-        // Flush deferred text AFTER tool results (not before!)
-        // This keeps tool results right after the assistant's tool_calls
+
+        // Flush deferred text AFTER tool results (to keep tool results adjacent)
         if (deferredText !== null) {
           messages.push({ role: 'assistant', content: deferredText });
           deferredText = null;

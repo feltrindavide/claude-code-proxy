@@ -133,6 +133,12 @@ export class CustomAdapter implements ProviderAdapter {
           }
         }
 
+        // If no tool results, flush deferred text BEFORE user message
+        if (deferredText !== null && toolResults.length === 0) {
+          messages.push({ role: 'assistant', content: deferredText });
+          deferredText = null;
+        }
+
         if (textContent) {
           messages.push({ role: 'user', content: textContent });
         }
