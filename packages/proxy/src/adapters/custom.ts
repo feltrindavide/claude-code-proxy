@@ -107,6 +107,12 @@ export class CustomAdapter implements ProviderAdapter {
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
+        if (Array.isArray(msg.content)) {
+          const thinkingBlocks = msg.content.filter((b: any) => b.type === 'thinking' && b.thinking);
+          if (thinkingBlocks.length > 0) {
+            assistantMsg.reasoning_content = thinkingBlocks.map((b: any) => b.thinking).join('');
+          }
+        }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
         let textContent = '';
