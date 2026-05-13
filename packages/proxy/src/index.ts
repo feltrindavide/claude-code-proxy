@@ -270,16 +270,24 @@ app.get('/admin/context', (_req, res) => {
 
 app.put('/admin/context', express.json(), (req, res) => {
   try {
-    const updates = req.body.models;
-    if (!Array.isArray(updates)) {
-      return res.status(400).json({ error: 'models must be an array' });
-    }
     const ctx = contextRegistry.load();
-    for (const update of updates) {
-      const existing = ctx.models.find(m => m.id === update.id && m.provider === update.provider);
-      if (existing) {
-        if (update.context) existing.context = update.context;
-        if (update.max_output) existing.max_output = update.max_output;
+    // Aggiorna modelli mappati
+    const updates = req.body.models;
+    if (Array.isArray(updates)) {
+      for (const update of updates) {
+        const existing = ctx.models.find(m => m.id === update.id && m.provider === update.provider);
+        if (existing) {
+          if (update.context) existing.context = update.context;
+          if (update.max_output) existing.max_output = update.max_output;
+        }
+      }
+    }
+    // Aggiorna tier Claude
+    if (req.body.claude && typeof req.body.claude === 'object') {
+      for (const [tier, context] of Object.entries(req.body.claude)) {
+        if (['opus', 'sonnet', 'haiku'].includes(tier) && typeof context === 'number') {
+          ctx.claude[tier] = context;
+        }
       }
     }
     contextRegistry.save(ctx);
