@@ -272,16 +272,8 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content (OpenAI extended thinking format)
-        const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
-        if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) {
-            yield evt;
-          }
-          yield sse.emitTextDelta(reasoningContent);
-        }
-
-        // Handle text content deltas
+        // Handle text content deltas (skip reasoning_content - DeepSeek requires it
+        // to be passed back as structured field, not as text)
         if (delta?.content) {
           for (const evt of sse.ensureTextBlock()) {
             yield evt;
