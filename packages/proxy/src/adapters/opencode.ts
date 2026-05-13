@@ -93,13 +93,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
         if (toolCalls.length > 0) {
           assistantMsg.tool_calls = toolCalls;
         }
-        // Preserve reasoning_content for DeepSeek compatibility (DEEPSEEK requirement)
-        if (Array.isArray(msg.content)) {
-          const thinkingBlocks = msg.content.filter((b: any) => b.type === 'thinking' && b.thinking);
-          if (thinkingBlocks.length > 0) {
-            assistantMsg.reasoning_content = thinkingBlocks.map((b: any) => b.thinking).join('');
-          }
-        }
         messages.push(assistantMsg);
       } else if (msg.role === 'user') {
         // User messages: extract text content + tool_results
@@ -237,14 +230,14 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content (DeepSeek emits reasoning_content
-        // instead of content. Emit as thinking blocks for proper client handling.)
+        // Handle reasoning/thinking content (DeepSeek emits reasoning_content)
+        // Emit as text so it's preserved in follow-up requests (Claude Code drops thinking blocks)
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureThinkingBlock()) {
+          for (const evt of sse.ensureTextBlock()) {
             yield evt;
           }
-          yield sse.emitThinkingDelta(reasoningContent);
+          yield sse.emitTextDelta(reasoningContent);
         }
 
         // Handle text content deltas (with think tag and heuristic tool parsing)

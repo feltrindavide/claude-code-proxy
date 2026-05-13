@@ -110,10 +110,7 @@ export class CustomAdapter implements ProviderAdapter {
         if (Array.isArray(msg.content)) {
           const thinkingBlocks = msg.content.filter((b: any) => b.type === 'thinking' && b.thinking);
           if (thinkingBlocks.length > 0) {
-            assistantMsg.reasoning_content = thinkingBlocks.map((b: any) => b.thinking).join('');
-          }
-        }
-        messages.push(assistantMsg);
+          messages.push(assistantMsg);
       } else if (msg.role === 'user') {
         let textContent = '';
         const toolResults: Array<Record<string, unknown>> = [];
@@ -281,10 +278,10 @@ export class CustomAdapter implements ProviderAdapter {
         // Handle reasoning/thinking content (OpenAI extended thinking format)
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureThinkingBlock()) {
+          for (const evt of sse.ensureTextBlock()) {
             yield evt;
           }
-          yield sse.emitThinkingDelta(reasoningContent);
+          yield sse.emitTextDelta(reasoningContent);
         }
 
         // Handle text content deltas
