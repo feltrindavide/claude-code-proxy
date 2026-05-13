@@ -11,15 +11,15 @@ interface ModelEntry {
   max_output: number;
 }
 
-interface ClaudeEntry {
-  key: string;
-  context: number;
+interface ProviderModel {
+  name: string;
+  models: string[];
 }
 
 export function ContextEditor() {
   const { toast } = useToast();
   const [models, setModels] = useState<ModelEntry[]>([]);
-  const [claudeTiers, setClaudeTiers] = useState<ClaudeEntry[]>([]);
+  const [claudeTiers, setClaudeTiers] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -30,34 +30,30 @@ export function ContextEditor() {
 
   async function loadData() {
     try {
-      // Fetch routes per sapere quali modelli sono mappati
-      const [ctxResp, routesResp] = await Promise.all([
+      const [ctxResp, provResp] = await Promise.all([
         fetch('http://localhost:3456/admin/context'),
-        fetch('http://localhost:3456/admin/routes'),
+        fetch('http://localhost:3456/admin/providers'),
       ]);
       const ctx = await ctxResp.json();
-      const routes = await routesResp.json();
+      const providers: ProviderModel[] = await provResp.json();
 
-      // Modelli mappati dalle route
-      const routeModels = new Set<string>();
-      const routeList = Array.isArray(routes) ? routes : (routes.routes || []);
-      for (const r of routeList) {
-        if (r.targetModel) routeModels.add(r.targetModel);
+      // Costruisce set di modelli presenti nei provider (Model Library)
+      const knownModels = new Set<string>();
+      for (const p of providers) {
+        if (!p.models) continue;
+        for (const mId of p.models) {
+          knownModels.add(`${p.name}:${mId}`);
+        }
       }
 
-      // Filtra solo i modelli presenti nelle route
-      const mapped = (ctx.config.models || []).filter(
-        (m: ModelEntry) => routeModels.has(m.id)
+      // Filtra solo modelli presenti nei provider
+      const filtered = (ctx.config.models || []).filter(
+        (m: ModelEntry) => knownModels.has(`${m.provider}:${m.id}`)
       );
-      setModels(mapped);
+      setModels(filtered);
 
-      // Tier Claude (opus, sonnet, haiku)
-      const claude = ctx.config.claude || {};
-      setClaudeTiers([
-        { key: 'opus', context: claude.opus || 1000000 },
-        { key: 'sonnet', context: claude.sonnet || 1000000 },
-        { key: 'haiku', context: claude.haiku || 200000 },
-      ]);
+      // Tier Claude
+      setClaudeTiers(ctx.config.claude || {});
     } catch {
       toast('Failed to load context', 'error');
     } finally {
@@ -65,24 +61,22 @@ export function ContextEditor() {
     }
   }
 
-  function updateModel(idx: number, field: keyof ModelEntry, value: string) {
+  function updateModel(idx: number, field: 'context' | 'max_output', value: string) {
     const updated = [...models];
     const parsed = parseInt(value, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      (updated[idx] as any)[field] = parsed;
+      updated[idx] = { ...updated[idx], [field]: parsed };
     }
     setModels(updated);
     setDirty(true);
   }
 
-  function updateClaude(idx: number, value: string) {
-    const updated = [...claudeTiers];
+  function updateClaude(tier: string, value: string) {
     const parsed = parseInt(value, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      updated[idx] = { ...updated[idx], context: parsed };
+      setClaudeTiers(prev => ({ ...prev, [tier]: parsed }));
+      setDirty(true);
     }
-    setClaudeTiers(updated);
-    setDirty(true);
   }
 
   async function handleSave() {
@@ -91,7 +85,7 @@ export function ContextEditor() {
       await fetch('http://localhost:3456/admin/context', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models, claude: Object.fromEntries(claudeTiers.map(t => [t.key, t.context])) }),
+        body: JSON.stringify({ models, claude: claudeTiers }),
       });
       setDirty(false);
       toast('Context settings saved', 'success');
@@ -107,13 +101,7 @@ export function ContextEditor() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="flex justify-between items-center mb-lg">
-        <h2 className="font-display text-[22px] text-ink">Model Context</h2>
-        <Button variant="primary" onClick={handleSave} loading={saving} disabled={!dirty}>
-          Save Changes
-        </Button>
-      </div>
+    <div className="max-w-2xl mx-auto space-y-lg">
 
       {/* Claude official tiers */}
       <Card title="Claude Official (reference)">
@@ -126,16 +114,16 @@ export function ContextEditor() {
               </tr>
             </thead>
             <tbody>
-              {claudeTiers.map((t, i) => (
-                <tr key={t.key} className="border-b border-hairline last:border-0">
+              {['opus', 'sonnet', 'haiku'].map(tier => (
+                <tr key={tier} className="border-b border-hairline last:border-0">
                   <td className="py-sm pr-md">
-                    <span className="font-mono text-sm text-ink capitalize">{t.key}</span>
+                    <span className="font-mono text-sm text-ink capitalize">{tier}</span>
                   </td>
                   <td className="py-sm">
                     <input
                       type="number"
-                      value={t.context}
-                      onChange={(e) => updateClaude(i, e.target.value)}
+                      value={claudeTiers[tier] ?? 200000}
+                      onChange={(e) => updateClaude(tier, e.target.value)}
                       className="w-32 bg-surface-card text-ink border border-hairline rounded-md text-sm focus-ring h-8 px-2"
                       min={8192}
                       step={1024}
@@ -148,8 +136,8 @@ export function ContextEditor() {
         </div>
       </Card>
 
-      {/* Mapped models */}
-      <Card title="Mapped Models" className="mt-lg">
+      {/* Mapped models from Model Library */}
+      <Card title="Model Library Context">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -195,11 +183,17 @@ export function ContextEditor() {
           </table>
         </div>
         {models.length === 0 && (
-          <p className="text-body py-lg text-center">No models in mapping. Go to Model Mapping first.</p>
+          <p className="text-body py-lg text-center">No models in library. Go to Models page first.</p>
         )}
       </Card>
 
-      <div className="mt-md text-small text-muted space-y-xs">
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={handleSave} loading={saving} disabled={!dirty}>
+          Save Changes
+        </Button>
+      </div>
+
+      <div className="text-small text-muted space-y-xs">
         <p><strong>Context</strong>: limite di input del modello (es. DeepSeek = 131.072)</p>
         <p><strong>Max Output</strong>: limite di output tokens per richiesta (es. DeepSeek = 8.192)</p>
         <p><strong>Claude Official</strong>: contesto dei tier Claude ufficiali (riferimento per inflation)</p>
