@@ -119,11 +119,21 @@ export class CustomAdapter implements ProviderAdapter {
             if (block.type === 'text') {
               textContent += block.text ?? '';
             } else if (block.type === 'tool_result') {
-              const resultContent = typeof block.content === 'string'
-                ? block.content
-                : Array.isArray(block.content)
-                  ? block.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-                  : '';
+              // Serialize tool_result content to string (matching free-claude-code)
+              const resultContent = (() => {
+                const c = block.content;
+                if (c === null || c === undefined) return '';
+                if (typeof c === 'string') return c;
+                if (typeof c === 'object' && !Array.isArray(c)) return JSON.stringify(c);
+                if (Array.isArray(c)) {
+                  return c.map((item: any) => {
+                    if (item?.type === 'text') return item.text ?? '';
+                    if (typeof item === 'object') return JSON.stringify(item);
+                    return String(item ?? '');
+                  }).join('\n');
+                }
+                return String(c);
+              })();
               toolResults.push({
                 role: 'tool',
                 tool_call_id: block.tool_use_id,
