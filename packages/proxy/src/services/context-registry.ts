@@ -57,6 +57,16 @@ const KNOWN_CONTEXTS: Record<string, { context: number; max_output: number }> = 
   'claude-opus-4-7': { context: 1_000_000, max_output: 8_192 },
   'claude-sonnet-4-6': { context: 1_000_000, max_output: 8_192 },
   'claude-haiku-4-5': { context: 200_000, max_output: 8_192 },
+  'claude-sonnet-4-20250514': { context: 200_000, max_output: 8_192 },
+  'claude-3-5-sonnet-20241022': { context: 200_000, max_output: 8_192 },
+  'claude-3-5-haiku-20241022': { context: 200_000, max_output: 8_192 },
+  // === DeepSeek (direct) ===
+  'deepseek-chat': { context: 64_000, max_output: 8_192 },
+  'deepseek-reasoner': { context: 64_000, max_output: 8_192 },
+  // === Gemini (Google AI) ===
+  'gemini-2.5-pro-exp-03-25': { context: 1_000_000, max_output: 65_536 },
+  'gemini-2.5-flash-preview-04-17': { context: 1_000_000, max_output: 65_536 },
+  'gemini-2.0-flash': { context: 1_000_000, max_output: 8_192 },
   // === Tencent ===
   'hy3-preview': { context: 262_144, max_output: 262_144 },
   // === Altri (default stimati) ===

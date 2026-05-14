@@ -6,7 +6,7 @@
  * Map-based registry like ProviderService — adapters register on import
  */
 
-import type { ProviderAdapter } from './interface.js';
+import type { ProviderAdapter, ValidationResult } from './interface.js';
 import { OpenRouterAdapter } from './openrouter.js';
 import { OpenCodeAdapter } from './opencode.js';
 import { OllamaAdapter } from './ollama.js';
@@ -62,3 +62,50 @@ registerAdapter(new (class extends OpenCodeAdapter {
 })());
 // Custom Anthropic format (passthrough like OpenRouter)
 registerAdapter(new CustomAdapter({ apiFormat: 'anthropic', providerType: 'custom-anthropic' }));
+
+// Google Gemini (OpenAI-compatible at /v1beta/openai/chat/completions)
+registerAdapter(new (class extends OpenCodeAdapter {
+  readonly providerType = 'google-gemini';
+  readonly apiPath = '/v1beta/openai/chat/completions';
+})());
+
+// Anthropic native API (passthrough with custom validation)
+registerAdapter(new (class extends OpenRouterAdapter {
+  readonly providerType = 'anthropic';
+  readonly apiPath = '/v1/messages';
+
+  // Anthropic doesn't have GET /v1/models; validate via minimal POST
+  async validate(baseUrl: string, apiKey: string): Promise<ValidationResult> {
+    try {
+      const resp = await fetch(`${baseUrl}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (resp.ok || resp.status === 400) {
+        return { valid: true };
+      }
+      return { valid: false, error: `Anthropic validation failed: ${resp.status}` };
+    } catch (error) {
+      return {
+        valid: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+})());
+
+// DeepSeek (OpenAI-compatible at /v1/chat/completions)
+registerAdapter(new (class extends OpenCodeAdapter {
+  readonly providerType = 'deepseek';
+  // Uses default OpenCodeAdapter: /v1/chat/completions
+})());

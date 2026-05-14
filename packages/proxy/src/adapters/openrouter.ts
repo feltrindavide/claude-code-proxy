@@ -24,7 +24,7 @@ import { createParser } from 'eventsource-parser';
 import type { EventSourceMessage } from 'eventsource-parser';
 
 export class OpenRouterAdapter implements ProviderAdapter {
-  readonly providerType = 'openrouter';
+  readonly providerType: string = 'openrouter';
   readonly apiPath = '/v1/messages';
   timeouts = { streaming: 120_000, nonStreaming: 30_000 };
 

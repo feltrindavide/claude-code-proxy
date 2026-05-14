@@ -13,13 +13,16 @@ interface ProviderFormProps {
   onClose: () => void;
 }
 
-const providerTypes = ['OpenRouter', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Custom'];
+const providerTypes = ['OpenRouter', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Google Gemini', 'Anthropic', 'DeepSeek', 'Custom'];
 
 const defaultBaseUrls: Record<string, string> = {
   'OpenRouter': 'https://openrouter.ai/api',
   'OpenCode Zen': 'https://opencode.ai/zen',
   'OpenCode Go': 'https://opencode.ai/zen/go',
   'Ollama': 'http://localhost:11434',
+  'Google Gemini': 'https://generativelanguage.googleapis.com',
+  'Anthropic': 'https://api.anthropic.com',
+  'DeepSeek': 'https://api.deepseek.com',
   'Custom': '',
 };
 
@@ -64,6 +67,9 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
       'OpenCode Zen': 'opencode-zen',
       'OpenCode Go': 'opencode-go',
       'Ollama': 'Ollama',
+      'Google Gemini': 'google-gemini',
+      'Anthropic': 'anthropic',
+      'DeepSeek': 'deepseek',
       'Custom': apiFormat === 'anthropic' ? 'custom-anthropic' : 'custom',
     };
     return map[displayType] || displayType;

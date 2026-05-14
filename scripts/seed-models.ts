@@ -76,6 +76,41 @@ const providers: SeedProvider[] = [
     enabled: true,
     priority: 4,
   },
+  {
+    name: 'google-gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    providerType: 'google-gemini',
+    models: [
+      'gemini-2.5-pro-exp-03-25',
+      'gemini-2.5-flash-preview-04-17',
+      'gemini-2.0-flash',
+    ],
+    enabled: true,
+    priority: 5,
+  },
+  {
+    name: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    providerType: 'anthropic',
+    models: [
+      'claude-sonnet-4-20250514',
+      'claude-3-5-sonnet-20241022',
+      'claude-3-5-haiku-20241022',
+    ],
+    enabled: true,
+    priority: 6,
+  },
+  {
+    name: 'deepseek',
+    baseUrl: 'https://api.deepseek.com',
+    providerType: 'deepseek',
+    models: [
+      'deepseek-chat',
+      'deepseek-reasoner',
+    ],
+    enabled: true,
+    priority: 7,
+  },
 ];
 
 async function seed() {
