@@ -41,8 +41,8 @@ async function main() {
     const provider = usage.provider || '';
     const tier = usage.tier || '';
     const inflation = usage.inflation || 1;
-    const inputTokens = usage.inputTokens || 0;
-    const outputTokens = usage.outputTokens || 0;
+    const inputTokens = (usage.peakInputTokens || usage.inputTokens || 0);
+    const outputTokens = (usage.peakOutputTokens || usage.outputTokens || 0);
 
     // Se non ci sono dati (proxy appena avviato o nessuna richiesta ancora)
     if (!model) {

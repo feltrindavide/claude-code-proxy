@@ -91,10 +91,10 @@ export class ProviderService {
    * Searches all providers for the given model name
    */
   resolveCustomModel(modelName: string): RouteResolution | null {
+    // Prima prova match esatto
     for (const provider of this.providers.values()) {
       if (!provider.enabled) continue;
       if (provider.models.includes(modelName)) {
-        // Determine which tier this model maps to, if any
         const matchingRoute = this.routes.find(r => r.targetModel === modelName && r.providerName === provider.name);
         return {
           provider,
@@ -104,6 +104,23 @@ export class ProviderService {
         };
       }
     }
+
+    // Se match esatto fallisce, prova match parziale (es. "glm-4.5-air" matcha "z-ai/glm-4.5-air:free")
+    for (const provider of this.providers.values()) {
+      if (!provider.enabled) continue;
+      for (const mId of provider.models) {
+        if (mId.toLowerCase().includes(modelName.toLowerCase()) || modelName.toLowerCase().includes(mId.toLowerCase())) {
+          const matchingRoute = this.routes.find(r => r.targetModel === mId && r.providerName === provider.name);
+          return {
+            provider,
+            targetModel: mId,
+            originalModel: modelName,
+            claudeTier: matchingRoute?.claudeTier,
+          };
+        }
+      }
+    }
+
     return null;
   }
 

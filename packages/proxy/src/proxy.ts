@@ -114,20 +114,27 @@ function extractSubagentModel(body: Record<string, unknown>): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Persistenza ultimo utilizzo contesto (sopravvive ai riavvii del proxy)
+// Persistenza utilizzo contesto — salva il PEAK (massimo storico)
+// In questo modo, se una richiesta ha meno token (es. cambio modello), la
+// barra mostra comunque il valore più alto raggiunto.
 // ---------------------------------------------------------------------------
 const USAGE_FILE = join(homedir(), '.claude', 'claude-code-proxy', 'data', 'context-usage.json');
 
-function loadLastUsage(): LastContextUsage {
-  try {
-    if (existsSync(USAGE_FILE)) {
-      return JSON.parse(readFileSync(USAGE_FILE, 'utf-8')) as LastContextUsage;
-    }
-  } catch {}
-  return { inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1 };
+interface PersistedUsage extends LastContextUsage {
+  peakInputTokens?: number;
+  peakOutputTokens?: number;
 }
 
-function saveLastUsage(usage: LastContextUsage): void {
+function loadLastUsage(): PersistedUsage {
+  try {
+    if (existsSync(USAGE_FILE)) {
+      return JSON.parse(readFileSync(USAGE_FILE, 'utf-8')) as PersistedUsage;
+    }
+  } catch {}
+  return { inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1, peakInputTokens: 0, peakOutputTokens: 0 };
+}
+
+function saveLastUsage(usage: PersistedUsage): void {
   try {
     const dir = join(homedir(), '.claude', 'claude-code-proxy', 'data');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -135,11 +142,10 @@ function saveLastUsage(usage: LastContextUsage): void {
   } catch {}
 }
 
-export let lastContextUsage: LastContextUsage = loadLastUsage();
+export let lastContextUsage: PersistedUsage = loadLastUsage();
 
-// Se abbiamo dati persistenti, logghiamo il ripristino
 if (lastContextUsage.model) {
-  console.log(`[Context] Restored last usage: ${lastContextUsage.model} | ${lastContextUsage.inputTokens + lastContextUsage.outputTokens} tokens`);
+  console.log(`[Context] Restored: ${lastContextUsage.model} | ${lastContextUsage.inputTokens + lastContextUsage.outputTokens} tokens (peak: ${(lastContextUsage.peakInputTokens || 0) + (lastContextUsage.peakOutputTokens || 0)})`);
 }
 
 /**
@@ -543,11 +549,15 @@ function inflateUsageTokens(event: string, factor: number): string {
   return event;
 }
 
-/** Aggiorna il tracciamento ultimo utilizzo e salva su disco */
+/** Aggiorna il tracciamento ultimo utilizzo e salva su disco (peak) */
 function updateLastUsage(
   inputCount: number, outputCount: number,
   resolution: RouteResolution, inflation: number,
 ): void {
+  const total = inputCount + outputCount;
+  const prevPeak = (lastContextUsage.peakInputTokens || 0) + (lastContextUsage.peakOutputTokens || 0);
+  const totalIsNewPeak = total >= prevPeak;
+
   lastContextUsage = {
     inputTokens: inputCount,
     outputTokens: outputCount,
@@ -555,6 +565,9 @@ function updateLastUsage(
     provider: resolution.provider.name,
     tier: resolution.claudeTier || '',
     inflation,
+    // Aggiorna peak SOLO se il totale corrente è maggiore del peak storico
+    peakInputTokens: totalIsNewPeak ? inputCount : (lastContextUsage.peakInputTokens || inputCount),
+    peakOutputTokens: totalIsNewPeak ? outputCount : (lastContextUsage.peakOutputTokens || outputCount),
   };
   saveLastUsage(lastContextUsage);
 }
