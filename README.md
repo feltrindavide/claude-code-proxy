@@ -21,6 +21,9 @@ Choose a type:
 | **OpenCode Zen** | `https://opencode.ai/zen` | Anthropic native |
 | **OpenCode Go** | `https://opencode.ai/zen/go` | Anthropic native |
 | **Ollama** | `http://localhost:11434` | Anthropic native |
+| **Google Gemini** | `https://generativelanguage.googleapis.com` | OpenAI (`/v1beta/chat/completions`) |
+| **Anthropic** | `https://api.anthropic.com` | Anthropic native |
+| **DeepSeek** | `https://api.deepseek.com` | OpenAI (`/v1/chat/completions`) |
 | **Custom** | Your URL | OpenAI or Anthropic |
 
 ### 2. Map models
@@ -46,7 +49,11 @@ The proxy handles routing automatically. Check for updates in **Settings → Abo
 | ⌨️ **Quick popup** | Click tray icon for status, start/stop, quick mapping |
 | 📐 **Context tracking** | Per-model context/max_output registry with token inflation for auto-compact |
 | 🧠 **Smart token limits** | Auto-boosts small `max_tokens` for reasoning models, clamps to model limits |
-| 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model usage and context fill |
+| 🎯 **Accurate token counting** | tiktoken (cl100k_base) instead of chars/4 for precise context metrics |
+| 🔧 **Tool arg repair** | Auto-fixes malformed JSON in tool call arguments (single quotes, trailing commas, unquoted keys) |
+| 🏷️ **Subagent model tag** | `<CCR-SUBAGENT-MODEL>` in system prompt to route subagents to a different model |
+| 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model, provider, tier, and context fill |
+| 📟 **Status line** | Terminal status line showing model, provider, tier, context usage, and inflation factor |
 
 ## Menu bar popup
 
@@ -72,7 +79,7 @@ npm run tauri build  # Build .dmg
 | **Proxy** | Express.js (TypeScript) |
 | **Frontend** | Next.js 15, Tailwind CSS, Zustand |
 | **Desktop** | Tauri 2.x (Rust) |
-| **Providers** | OpenRouter, OpenCode Zen/Go, Ollama, Custom |
+| **Providers** | OpenRouter, OpenCode Zen/Go, Ollama, Google Gemini, Anthropic, DeepSeek, Custom |
 
 ## Requirements
 
@@ -88,7 +95,8 @@ The proxy automatically sets `ANTHROPIC_BASE_URL=http://localhost:3456`. Claude 
 The `~/.claude-code-proxy/` directory contains:
 - `config.json` — providers, routes, model library
 - `proxy-context.json` — model context windows and max output limits (editable in Settings)
-- `scripts/context-status.js` — terminal script for `/proxy-context`
+- `scripts/context-status.js` — terminal script showing model, provider, tier, and live context fill
+- `custom-router.js` — (optional) custom routing logic loaded at runtime
 
 ## License
 
