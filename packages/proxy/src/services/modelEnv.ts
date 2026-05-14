@@ -1,5 +1,5 @@
 /**
- * ModelEnvService — writes ANTHROPIC_DEFAULT_* env vars to ~/.claude-code-proxy/models.sh
+ * ModelEnvService — writes ANTHROPIC_DEFAULT_* env vars to ~/.claude/claude-code-proxy/models.sh
  * Auto-updates when user changes Model Mapping in the UI.
  * Claude Code reads these env vars to show custom models in the /model picker.
  */

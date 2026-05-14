@@ -3,7 +3,7 @@
  * Phase: 01-core-proxy-server
  * Plan: 01-02, Task 1
  * 
- * Stores config at ~/.claude-code-proxy/config.json
+ * Stores config at ~/.claude/claude-code-proxy/config.json
  * Per D-13: Config stores keyId (Keychain account name), never the actual key
  */
 
@@ -69,7 +69,7 @@ export type AppConfig = z.infer<typeof proxyConfigSchema>;
 /**
  * ConfigService — manages proxy configuration persistence
  * 
- * Load: reads from ~/.claude-code-proxy/config.json
+ * Load: reads from ~/.claude/claude-code-proxy/config.json
  * Save: atomic write with temp file + rename
  */
 export class ConfigService {

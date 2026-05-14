@@ -3,7 +3,7 @@
  * Phase: 04-model-mapping-ui-routing-log
  * Plan: 04-01
  *
- * Persists the last 50 request log entries at ~/.claude-code-proxy/request-log.json
+ * Persists the last 50 request log entries at ~/.claude/claude-code-proxy/request-log.json
  * Uses atomic write pattern (temp file + renameSync) matching ConfigService
  */
 

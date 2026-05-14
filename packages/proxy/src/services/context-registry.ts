@@ -2,7 +2,7 @@
  * ContextRegistry — gestisce proxy-context.json per tracciamento contesto modelli
  * Phase: 07-context-tracker
  *
- * Salva in ~/.claude-code-proxy/proxy-context.json la mappa dei modelli con
+ * Salva in ~/.claude/claude-code-proxy/proxy-context.json la mappa dei modelli con
  * contesto massimo e max output tokens. Usato per token inflation.
  */
 

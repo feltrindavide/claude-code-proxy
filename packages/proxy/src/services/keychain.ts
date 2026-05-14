@@ -1,5 +1,5 @@
 /**
- * SecretStore — stores API keys in ~/.claude-code-proxy/secrets.json
+ * SecretStore — stores API keys in ~/.claude/claude-code-proxy/secrets.json
  * Replaces macOS Keychain (keytar) with a local encrypted file.
  * 
  * Uses XOR + base64 encoding for basic obfuscation at rest.
