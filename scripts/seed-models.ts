@@ -80,11 +80,7 @@ const providers: SeedProvider[] = [
     name: 'google-gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
     providerType: 'google-gemini',
-    models: [
-      'gemini-2.5-pro-exp-03-25',
-      'gemini-2.5-flash-preview-04-17',
-      'gemini-2.0-flash',
-    ],
+    models: [], // Discover via Scan after adding API key
     enabled: true,
     priority: 5,
   },
@@ -92,11 +88,7 @@ const providers: SeedProvider[] = [
     name: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     providerType: 'anthropic',
-    models: [
-      'claude-sonnet-4-20250514',
-      'claude-3-5-sonnet-20241022',
-      'claude-3-5-haiku-20241022',
-    ],
+    models: [], // Discover via Scan after adding API key
     enabled: true,
     priority: 6,
   },
@@ -104,10 +96,7 @@ const providers: SeedProvider[] = [
     name: 'deepseek',
     baseUrl: 'https://api.deepseek.com',
     providerType: 'deepseek',
-    models: [
-      'deepseek-chat',
-      'deepseek-reasoner',
-    ],
+    models: [], // Discover via Scan after adding API key
     enabled: true,
     priority: 7,
   },
