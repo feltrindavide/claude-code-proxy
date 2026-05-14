@@ -29,6 +29,8 @@ Go to **Model Mapping** → select provider/model per Claude tier (Opus/Sonnet/H
 ### 3. Use Claude Code
 The proxy handles routing automatically. Check for updates in **Settings → About → Check for Updates**.
 
+> 💡 In Claude Code, type `/proxy-context` to see which model was used last and how much of the context window was consumed. This skill is auto-installed when the app starts.
+
 ## Features
 
 | | |
@@ -42,6 +44,9 @@ The proxy handles routing automatically. Check for updates in **Settings → Abo
 | 🎨 **Provider types** | OpenRouter, OpenCode Zen/Go, Ollama, Custom |
 | ⚙️ **Custom API format** | Choose OpenAI or Anthropic format for custom providers |
 | ⌨️ **Quick popup** | Click tray icon for status, start/stop, quick mapping |
+| 📐 **Context tracking** | Per-model context/max_output registry with token inflation for auto-compact |
+| 🧠 **Smart token limits** | Auto-boosts small `max_tokens` for reasoning models, clamps to model limits |
+| 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model usage and context fill |
 
 ## Menu bar popup
 
@@ -74,6 +79,16 @@ npm run tauri build  # Build .dmg
 - macOS 12+ (Apple Silicon or Intel)
 - Node.js 18+
 - Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
+- `ANTHROPIC_BASE_URL` must be set to `http://localhost:3456` (auto-configured by setup)
+
+## Environment
+
+The proxy automatically sets `ANTHROPIC_BASE_URL=http://localhost:3456`. Claude Code sends all requests to the proxy, which routes them through configured providers.
+
+The `~/.claude-code-proxy/` directory contains:
+- `config.json` — providers, routes, model library
+- `proxy-context.json` — model context windows and max output limits (editable in Settings)
+- `scripts/context-status.js` — terminal script for `/proxy-context`
 
 ## License
 

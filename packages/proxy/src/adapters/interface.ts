@@ -27,6 +27,12 @@ export interface AnthropicMessagesBody {
     description: string;
     input_schema: Record<string, unknown>;
   }>;
+  /** OpenCode/OpenAI context management (compact prompts, etc.) */
+  context_management?: Array<{
+    type: 'compact' | 'truncation';
+    priority?: number;
+    maxTokens?: number;
+  }>;
 }
 
 /**

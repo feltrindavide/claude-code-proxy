@@ -584,6 +584,67 @@ async function generateDiagnostic(dryRun: boolean): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Feature 7: Install Claude Code proxy-context skill plugin
+// ---------------------------------------------------------------------------
+
+const SKILL_SRC = join(__dirname, 'plugins', 'proxy-context', 'SKILL.md');
+const SCRIPT_SRC = join(__dirname, 'context-status.js');
+
+async function installProxyContextPlugin(dryRun: boolean): Promise<void> {
+  section('7. Install /proxy-context Skill Plugin');
+
+  const skillDir = join(homedir(), '.claude', 'skills', 'proxy-context');
+  const skillDest = join(skillDir, 'SKILL.md');
+  const scriptsDir = join(homedir(), '.claude-code-proxy', 'scripts');
+  const scriptDest = join(scriptsDir, 'context-status.js');
+
+  if (dryRun) {
+    log(`[DRY RUN] Would create ${skillDest}`);
+    log(`[DRY RUN] Would create ${scriptDest}`);
+    log(`[DRY RUN] Would chmod +x ${scriptDest}`);
+    return;
+  }
+
+  let installed = false;
+
+  // Install SKILL.md
+  if (existsSync(SKILL_SRC)) {
+    if (!existsSync(skillDir)) {
+      mkdirSync(skillDir, { recursive: true, mode: 0o700 });
+    }
+    const content = readFileSync(SKILL_SRC, 'utf-8');
+    writeFileSync(skillDest, content, { mode: 0o600 });
+    ok(`Installed proxy-context skill → ${skillDest}`);
+    installed = true;
+  } else {
+    warn(`Skill source not found: ${SKILL_SRC}`);
+  }
+
+  // Install context-status.js
+  if (existsSync(SCRIPT_SRC)) {
+    if (!existsSync(scriptsDir)) {
+      mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
+    }
+    const content = readFileSync(SCRIPT_SRC, 'utf-8');
+    writeFileSync(scriptDest, content, { mode: 0o755 });
+    ok(`Installed context-status script → ${scriptDest}`);
+    installed = true;
+  } else {
+    warn(`Script source not found: ${SCRIPT_SRC}`);
+  }
+
+  if (!installed) {
+    warn('No plugin files were installed — check scripts/ directory structure');
+    return;
+  }
+
+  log('\n  Usage:');
+  log(`    In Claude Code: type /proxy-context`);
+  log(`    Or run: node ${scriptDest}`);
+  log(`  To add to status line, edit ~/.claude/settings.json → statusLine.command`);
+}
+
+// ---------------------------------------------------------------------------
 // CLI Entry Point
 // ---------------------------------------------------------------------------
 
@@ -642,6 +703,9 @@ async function main() {
   // Feature 6: Generate diagnostic report
   await generateDiagnostic(dryRun);
 
+  // Feature 7: Install /proxy-context skill plugin
+  await installProxyContextPlugin(dryRun);
+
   if (dryRun) {
     log('\n📋 DRY RUN complete — no changes were made.\n');
   } else {
@@ -649,7 +713,8 @@ async function main() {
     log('Next steps:');
     log('  1. Restart your terminal or run: source ~/.zshenv');
     log('  2. Start the proxy: npx claude-code-proxy start');
-    log('  3. Verify: npx claude-code-proxy status\n');
+    log('  3. Verify: npx claude-code-proxy status');
+    log('  4. In Claude Code, type /proxy-context to see model usage\n');
   }
 }
 
@@ -661,6 +726,7 @@ export {
   importBackup,
   configureKeychain,
   generateDiagnostic,
+  installProxyContextPlugin,
   detectShellProfile,
   getDefaultConfig,
 };

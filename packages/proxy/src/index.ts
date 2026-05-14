@@ -104,6 +104,9 @@ app.post('/providers', (req, res) => {
   };
 
   providerService.registerProvider(provider);
+  // Sync context registry with updated providers
+  const config = configService.load();
+  contextRegistry.syncFromConfig(config.providers);
   res.json({ success: true, provider: { ...provider } });
 });
 
@@ -118,6 +121,9 @@ app.delete('/providers/:name', (req, res) => {
   // Re-register as disabled (soft delete) or implement hard delete
   // For now, we'll just mark it as disabled
   providerService.registerProvider({ ...provider, enabled: false });
+  // Sync context registry after provider removal
+  const config = configService.load();
+  contextRegistry.syncFromConfig(config.providers);
   res.json({ success: true });
 });
 
@@ -180,6 +186,44 @@ app.get('/v1/models', (req, res) => {
   app.post('/v1/messages', express.json({ limit: '32mb' }), requestLoggerMiddleware, rateLimitMiddleware, handleProxyRequest);
 
 /**
+ * Auto-install Claude Code proxy-context plugin if bundled files exist
+ * but target files in ~/.claude/skills/ are missing.
+ */
+function installPluginOnStartup(): void {
+  const pluginSrcDir = path.join(__dirname, '../plugins');
+  const skillSrc = path.join(pluginSrcDir, 'proxy-context', 'SKILL.md');
+  const scriptSrc = path.join(pluginSrcDir, 'context-status.js');
+
+  if (!fs.existsSync(skillSrc) && !fs.existsSync(scriptSrc)) return; // no bundled files
+
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return;
+
+  const skillDest = path.join(home, '.claude', 'skills', 'proxy-context', 'SKILL.md');
+  const scriptDest = path.join(home, '.claude-code-proxy', 'scripts', 'context-status.js');
+
+  let installed = false;
+
+  if (fs.existsSync(skillSrc) && !fs.existsSync(skillDest)) {
+    fs.mkdirSync(path.dirname(skillDest), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(skillDest, fs.readFileSync(skillSrc, 'utf-8'), { mode: 0o600 });
+    console.log('[Setup] Installed proxy-context skill →', skillDest);
+    installed = true;
+  }
+
+  if (fs.existsSync(scriptSrc) && !fs.existsSync(scriptDest)) {
+    fs.mkdirSync(path.dirname(scriptDest), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(scriptDest, fs.readFileSync(scriptSrc, 'utf-8'), { mode: 0o755 });
+    console.log('[Setup] Installed context-status script →', scriptDest);
+    installed = true;
+  }
+
+  if (installed) {
+    console.log('[Setup] Run /proxy-context in Claude Code to see model context usage');
+  }
+}
+
+/**
  * Load configuration and populate service registries
  * Per D-13, D-14: reads config.json, stores Keychain IDs (not actual keys)
  * Per D-22: validates all providers on startup (warnings only, doesn't block)
@@ -203,6 +247,9 @@ async function loadConfigOnStartup(): Promise<void> {
   // Sync modelli con context-registry
   contextRegistry.syncFromConfig(config.providers);
   console.log(`[Context] Sincronizzati modelli da config.json in proxy-context.json`);
+
+  // Auto-install proxy-context plugin for Claude Code
+  installPluginOnStartup();
 
   // Load request log from disk (04-01)
   requestLogService.load();

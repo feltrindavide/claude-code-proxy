@@ -13,6 +13,10 @@ packages/proxy/dist/
 
 # Rust
 src-tauri/target/
+src-tauri/proxy-bundle/
+
+# Planning / GSD artifacts
+.planning/
 
 # Third-party reference code
 reference/

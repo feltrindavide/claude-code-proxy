@@ -27,6 +27,13 @@ else
   echo ">>> WARNING: Frontend build not found at $WEB_OUT. Run 'npm run build' first."
 fi
 
+# Copy plugin files into bundle (auto-installed by proxy on startup)
+PLUGIN_DIR="$BUNDLE_DIR/plugins/proxy-context"
+mkdir -p "$PLUGIN_DIR"
+cp scripts/plugins/proxy-context/SKILL.md "$PLUGIN_DIR/"
+cp scripts/context-status.js "$BUNDLE_DIR/plugins/"
+echo ">>> Plugin files copied ($(du -sh $PLUGIN_DIR | cut -f1))"
+
 # Package type with version from Tauri config
 VERSION=$(node -e "console.log(require('./src-tauri/tauri.conf.json').version || '0.1.0')")
 echo "{\"type\":\"commonjs\",\"name\":\"proxy-bundle\",\"version\":\"$VERSION\"}" > "$BUNDLE_DIR/package.json"

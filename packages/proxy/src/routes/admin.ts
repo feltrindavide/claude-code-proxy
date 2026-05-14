@@ -22,6 +22,7 @@ import { requestLogService } from '../services/requestLog.js';
 import { rateLimiterService } from '../services/rateLimiter.js';
 import { validationStoreService } from '../services/validationStore.js';
 import { writeModelEnvFile } from '../services/modelEnv.js';
+import { contextRegistry } from '../services/context-registry.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -77,6 +78,9 @@ router.put('/config', (req, res) => {
     
     configService.save(config);
     providerService.reload(config.providers || [], config.routes || []);
+    
+    // Sync context registry with updated models
+    contextRegistry.syncFromConfig(config.providers || []);
     
     res.json({ success: true });
   } catch (error) {
@@ -165,6 +169,9 @@ router.post('/providers', async (req, res) => {
     }
     configService.save(config);
 
+    // Sync context registry with updated models
+    contextRegistry.syncFromConfig(config.providers);
+
     // Validate provider connectivity on save (per D-22)
     // Log warning on failure but don't block — user may fix later
     let validation: { valid: boolean; error?: string } | undefined;
@@ -221,6 +228,9 @@ router.delete('/providers/:id', async (req, res) => {
     const config = configService.load();
     config.providers = config.providers.filter(p => p.name !== id);
     configService.save(config);
+
+    // Sync context registry after provider removal
+    contextRegistry.syncFromConfig(config.providers);
 
     console.log(`[Admin] Provider ${id} deleted and config saved`);
 
@@ -377,6 +387,9 @@ router.post('/config/import', (req, res) => {
 
     // Reload provider service with new config
     providerService.reload(imported.providers || [], imported.routes || []);
+
+    // Sync context registry with imported models
+    contextRegistry.syncFromConfig(imported.providers || []);
 
     res.json({ success: true, backupPath });
   } catch (error) {

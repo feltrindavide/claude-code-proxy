@@ -172,6 +172,16 @@ export async function handleProxyRequest(
     console.log(`[Proxy] Boosted max_tokens from ${originalMaxTokens} to ${boosted} for ${resolution.targetModel} (reasoning overhead)`);
   }
 
+  // Clamp max_tokens to model's max_output if known (evita errori "max_tokens exceeds model limit")
+  const modelInfo = contextRegistry.getModelContext(resolution.targetModel, resolution.provider.name);
+  if (modelInfo && (providerBody as any).max_tokens !== undefined) {
+    const current = (providerBody as any).max_tokens as number;
+    if (current > modelInfo.max_output) {
+      (providerBody as any).max_tokens = modelInfo.max_output;
+      console.log(`[Proxy] Clamped max_tokens from ${current} to ${modelInfo.max_output} (model max_output cap)`);
+    }
+  }
+
   // 6. Make upstream request with retry (D-66 to D-69)
   let retryAttempt = 0;
 
