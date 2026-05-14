@@ -195,7 +195,10 @@ export async function handleProxyRequest(
     resolution.provider.baseUrl,
   );
 
-  // 5. Transform request body (Anthropic → provider format)
+  // 5. Calcola token di input REALI per passarli a Claude Code
+  const realInputTokens = countRequestTokens(body.messages, body.system, body.tools);
+
+  // 5b. Transform request body (Anthropic → provider format)
   const providerBody = adapter.transformRequest(body, resolution);
 
   // Debug: check reasoning_content for DeepSeek
@@ -327,11 +330,11 @@ export async function handleProxyRequest(
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
-        inputTokens: 0,
+        inputTokens: realInputTokens.total,
       })) {
-        // Applica inflation a message_delta
-        if (inflationFactor !== 1 && event.includes('message_delta')) {
-          buf.push(inflateOutputTokens(event, inflationFactor));
+        // Applica inflation a message_start (input) e message_delta (output)
+        if (inflationFactor !== 1) {
+          buf.push(inflateUsageTokens(event, inflationFactor));
         } else {
           buf.push(event);
         }
@@ -358,7 +361,7 @@ export async function handleProxyRequest(
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
-        inputTokens: 0,
+        inputTokens: realInputTokens.total,
       })) {
         // Parse SSE event to extract data
         const dataMatch = event.match(/^data: (.+)$/m);
@@ -401,6 +404,9 @@ export async function handleProxyRequest(
       }
 
       const outTokens = estimateOutputTokens(contentText);
+      const inflationFactor = getInflationFactor(resolution);
+      const inflatedInput = Math.max(1, Math.round(realInputTokens.total * inflationFactor));
+      const inflatedOutput = Math.max(1, Math.round(outTokens * inflationFactor));
       res.json({
         id: `msg_${crypto.randomUUID()}`,
         type: 'message',
@@ -409,10 +415,9 @@ export async function handleProxyRequest(
         model: body.model,
         stop_reason: stopReason,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: outTokens },
+        usage: { input_tokens: inflatedInput, output_tokens: inflatedOutput },
       });
-      const inputTok = countRequestTokens(body.messages, body.system, body.tools);
-      updateLastUsage(inputTok.total, outTokens, resolution, getInflationFactor(resolution));
+      updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor);
     }
   } catch (error) {
     // Instead of emitting an error event (which Claude Code can't parse),
@@ -491,15 +496,21 @@ function getInflationFactor(resolution: RouteResolution): number {
   return claudeCtx / modelCtx.context;
 }
 
-/** Gonfia output_tokens in un evento message_delta */
-function inflateOutputTokens(event: string, factor: number): string {
+/** Gonfia input_tokens e output_tokens in eventi message_start e message_delta */
+function inflateUsageTokens(event: string, factor: number): string {
   try {
     const match = event.match(/^data: (.+)$/m);
     if (!match) return event;
     const parsed = JSON.parse(match[1]);
-    if (parsed.type === 'message_delta' && parsed.usage?.output_tokens) {
-      parsed.usage.output_tokens = Math.max(1, Math.round(parsed.usage.output_tokens * factor));
+    if (parsed.type === 'message_delta' && parsed.usage) {
+      if (parsed.usage.output_tokens) parsed.usage.output_tokens = Math.max(1, Math.round(parsed.usage.output_tokens * factor));
+      if (parsed.usage.input_tokens) parsed.usage.input_tokens = Math.max(1, Math.round(parsed.usage.input_tokens * factor));
       return `event: message_delta\ndata: ${JSON.stringify(parsed)}\n\n`;
+    }
+    if (parsed.type === 'message_start' && parsed.message?.usage) {
+      if (parsed.message.usage.input_tokens) parsed.message.usage.input_tokens = Math.max(1, Math.round(parsed.message.usage.input_tokens * factor));
+      if (parsed.message.usage.output_tokens) parsed.message.usage.output_tokens = Math.max(1, Math.round(parsed.message.usage.output_tokens * factor));
+      return `event: message_start\ndata: ${JSON.stringify(parsed)}\n\n`;
     }
   } catch {}
   return event;
@@ -520,4 +531,4 @@ function updateLastUsage(
   };
 }
 
-export { emitAnthropicError, inflateOutputTokens, getInflationFactor };
+export { emitAnthropicError, inflateUsageTokens, getInflationFactor };
