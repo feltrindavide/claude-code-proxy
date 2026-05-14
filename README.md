@@ -47,13 +47,15 @@ The proxy handles routing automatically. Check for updates in **Settings → Abo
 | 🎨 **Provider types** | OpenRouter, OpenCode Zen/Go, Ollama, Custom |
 | ⚙️ **Custom API format** | Choose OpenAI or Anthropic format for custom providers |
 | ⌨️ **Quick popup** | Click tray icon for status, start/stop, quick mapping |
-| 📐 **Context tracking** | Per-model context/max_output registry with token inflation for auto-compact |
+| 📐 **Per-session context tracking** | Each Claude Code session has independent model, tokens, and context tracking. Session-aware status line. |
 | 🧠 **Smart token limits** | Auto-boosts small `max_tokens` for reasoning models, clamps to model limits |
 | 🎯 **Accurate token counting** | tiktoken (cl100k_base) instead of chars/4 for precise context metrics |
 | 🔧 **Tool arg repair** | Auto-fixes malformed JSON in tool call arguments (single quotes, trailing commas, unquoted keys) |
 | 🏷️ **Subagent model tag** | `<CCR-SUBAGENT-MODEL>` in system prompt to route subagents to a different model |
 | 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model, provider, tier, and context fill |
-| 📟 **Status line** | Terminal status line showing model, provider, tier, context usage, and inflation factor |
+| 📟 **Per-session status line** | Auto-installed context bar showing model, folder, context %, inflation for the current session |
+| 🔄 **Auto-compact hook** | Automatically suggests compacting when context exceeds configurable threshold (default 70%) |
+| 🚀 **Partial model matching** | Type `glm-4.5-air` instead of `z-ai/glm-4.5-air:free` — proxy finds the closest match |
 
 ## Menu bar popup
 
@@ -92,11 +94,24 @@ npm run tauri build  # Build .dmg
 
 The proxy automatically sets `ANTHROPIC_BASE_URL=http://localhost:3456`. Claude Code sends all requests to the proxy, which routes them through configured providers.
 
-The `~/.claude-code-proxy/` directory contains:
-- `config.json` — providers, routes, model library
-- `proxy-context.json` — model context windows and max output limits (editable in Settings)
-- `scripts/context-status.js` — terminal script showing model, provider, tier, and live context fill
-- `custom-router.js` — (optional) custom routing logic loaded at runtime
+The `~/.claude/claude-code-proxy/` directory contains:
+```
+config.json              — providers, routes, auto-compact threshold
+proxy-context.json       — model context windows and max output limits (editable in Settings)
+models.sh                — env vars for Claude Code model picker
+scripts/
+  context-status.js      — per-session context bar (auto-installed)
+  auto-compact-hook.js   — PostToolUse hook for context alerts
+data/
+  sessions.json          — per-session token usage tracking
+  secrets.json           — API keys (macOS Keychain fallback)
+  request-log.json       — request history
+  rate-limits.json       — rate limit state
+  validation-results.json — provider validation state
+logs/
+  startup.log            — proxy startup log
+config-backup/           — automatic config backups
+```
 
 ## License
 
