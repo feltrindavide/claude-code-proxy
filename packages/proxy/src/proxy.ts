@@ -23,6 +23,7 @@ import { getUserFacingErrorMessage } from './services/sse-transformer.js';
 import { parseToolArguments } from './services/response-parsers.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 import { contextRegistry, type LastContextUsage } from './services/context-registry.js';
+import { countRequestTokens, estimateOutputTokens } from './services/token-counter.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -342,9 +343,9 @@ export async function handleProxyRequest(
       }
       if (buf.length > 0) res.write(buf.join(''));
       res.end();
-      // Traccia ultimo utilizzo (stima input da body JSON)
-      const inputEst = Math.round(JSON.stringify(body.messages || []).length / 4);
-      updateLastUsage(inputEst, 0, resolution, inflationFactor);
+      // Traccia ultimo utilizzo con conteggio token accurato
+      const inputTok = countRequestTokens(body.messages, body.system, body.tools);
+      updateLastUsage(inputTok.total, 0, resolution, inflationFactor);
     } else {
       // Non-streaming: accumulate events into a complete JSON response
       res.setHeader('Content-Type', 'application/json');
@@ -399,7 +400,7 @@ export async function handleProxyRequest(
         });
       }
 
-      const outTokens = Math.max(1, Math.round(contentText.length / 4));
+      const outTokens = estimateOutputTokens(contentText);
       res.json({
         id: `msg_${crypto.randomUUID()}`,
         type: 'message',
@@ -410,8 +411,8 @@ export async function handleProxyRequest(
         stop_sequence: null,
         usage: { input_tokens: 0, output_tokens: outTokens },
       });
-      const inputEst = Math.round(JSON.stringify(body.messages || []).length / 4);
-      updateLastUsage(inputEst, outTokens, resolution, getInflationFactor(resolution));
+      const inputTok = countRequestTokens(body.messages, body.system, body.tools);
+      updateLastUsage(inputTok.total, outTokens, resolution, getInflationFactor(resolution));
     }
   } catch (error) {
     // Instead of emitting an error event (which Claude Code can't parse),
@@ -453,7 +454,7 @@ export async function handleProxyRequest(
       emitSSEEvent(res, 'message_delta', {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
-        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(errMsg.length / 4)) },
+        usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
       });
       emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
       res.end();
@@ -467,7 +468,7 @@ export async function handleProxyRequest(
         model: body.model,
         stop_reason: 'end_turn',
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: Math.max(1, Math.round(errMsg.length / 4)) },
+        usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
       });
     }
   }
