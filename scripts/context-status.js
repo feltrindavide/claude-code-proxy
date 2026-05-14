@@ -2,6 +2,7 @@
 /**
  * Context status line script for Claude Code Proxy
  * Shows model, provider, tier, context usage in terminal-friendly format
+ * Colori: \x1b[2m = dim, \x1b[0m = reset
  *
  * Usage: node ~/.claude-code-proxy/scripts/context-status.js
  * Returns: "deepseek-v4-flash (opencode-go) | ████░░░░ 45k/128k (35%) | ×1.0"
@@ -13,6 +14,13 @@
  *   }
  */
 
+const DIM = '\x1b[2m';
+const RESET = '\x1b[0m';
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const RED = '\x1b[31m';
+const CYAN = '\x1b[36m';
+
 const PROXY_URL = 'http://localhost:3456';
 
 async function main() {
@@ -21,7 +29,7 @@ async function main() {
       signal: AbortSignal.timeout(2000),
     });
     if (!resp.ok) {
-      console.log('⚠ Proxy offline');
+      process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);
       process.exit(0);
     }
 
@@ -57,11 +65,16 @@ async function main() {
       maxContext = config.claude[tier];
     }
 
-    // Build progress bar (8 segments)
+    // Build progress bar (8 segments) with color
     const pct = Math.min(100, Math.round((totalUsed / maxContext) * 100));
     const filled = Math.min(8, Math.round((pct / 100) * 8));
     const empty = 8 - filled;
-    const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
+    let barColor = GREEN;
+    if (pct > 80) barColor = RED;
+    else if (pct > 50) barColor = YELLOW;
+
+    const bar = `${barColor}${'█'.repeat(filled)}${RESET}${DIM}${'░'.repeat(empty)}${RESET}`;
 
     // Format numbers (e.g. 45000 → 45k)
     const fmt = (n) => {
@@ -72,13 +85,19 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
-    const infl = inflation === 1 ? '' : ` ×${inflation.toFixed(1)}`;
-    const tierTag = tier ? ` [${tier}]` : '';
-    const provTag = provider ? ` (${provider})` : '';
+    const infl = inflation === 1 ? '' : ` ${DIM}×${inflation.toFixed(1)}${RESET}`;
+    const provTag = provider ? `${DIM}(${provider})${RESET} ` : '';
+    const tierTag = tier ? `${DIM}[${tier}]${RESET} ` : '';
 
-    console.log(`${model}${provTag}${tierTag} | ${bar} ${used}/${maxCtx} (${pct}%)${infl}`);
+    // Format: model (provider) [tier] | ████░░░░ 45k/128k (35%) ×1.0
+    const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
+    const pctStr = pctColor ? `${pctColor}${pct}%${RESET}` : `${pct}%`;
+
+    process.stdout.write(
+      `${DIM}${model}${RESET} ${provTag}${tierTag}${DIM}│${RESET} ${bar} ${DIM}${used}/${maxCtx} (${RESET}${pctStr}${DIM})${RESET}${infl}\n`,
+    );
   } catch (err) {
-    console.log('⚠ Proxy offline');
+    process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);
   }
 }
 
