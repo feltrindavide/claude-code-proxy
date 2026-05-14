@@ -16,6 +16,7 @@
 
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
+const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
@@ -37,32 +38,32 @@ async function main() {
     const config = data.config || {};
 
     const model = usage.model || '';
+    const tier = usage.tier || '';
     const inflation = usage.inflation || 1;
-
-    // Usa peak se disponibile
-    const inputTokens = (usage.peakInputTokens || usage.inputTokens || 0);
-    const outputTokens = (usage.peakOutputTokens || usage.outputTokens || 0);
+    const inputTokens = usage.inputTokens || 0;
+    const outputTokens = usage.outputTokens || 0;
     const totalUsed = inputTokens + outputTokens;
 
     // Se non ci sono dati
     if (!model) {
-      process.stdout.write(`${DIM}waiting for requests...${RESET}\n`);
+      process.stdout.write(`${DIM}○ waiting for requests...${RESET}\n`);
       process.exit(0);
     }
 
-    // Determina contesto massimo: PRIORITA' al modello reale, fallback al tier Claude
+    // Determina contesto massimo: priorità al modello reale, fallback al tier
     let maxContext = 200_000;
+    let foundModel = false;
     if (config.models && Array.isArray(config.models)) {
       const entry = config.models.find(
         (m) => m.id === model || model.includes(m.id),
       );
       if (entry && entry.context) {
         maxContext = entry.context;
+        foundModel = true;
       }
     }
-    // Fallback al tier Claude SOLO se il modello non è stato trovato in proxy-context.json
-    if (maxContext === 200_000 && usage.tier && config.claude && config.claude[usage.tier]) {
-      maxContext = config.claude[usage.tier];
+    if (!foundModel && tier && config.claude && config.claude[tier]) {
+      maxContext = config.claude[tier];
     }
 
     // Nome cartella corrente (da process.cwd)
@@ -93,9 +94,10 @@ async function main() {
     const pctStr = pctColor ? `${pctColor}${pct}%${RESET}` : `${pct}%`;
 
     // Format: model │ folder │ ████░░░░ 45k/131k (35%) ×1.0
+    // Model in bold, folder dim, rest normal
     const folderTag = folder ? `${DIM}${folder}${RESET}` : '';
     process.stdout.write(
-      `${DIM}${model}${RESET}${folderTag ? ` ${DIM}│${RESET} ${folderTag}` : ''} ${DIM}│${RESET} ${bar} ${DIM}${used}/${maxCtx} (${RESET}${pctStr}${DIM})${RESET}${infl}\n`,
+      `${BOLD}${model}${RESET}${folderTag ? ` ${DIM}│${RESET} ${folderTag}` : ''} ${DIM}│${RESET} ${bar} ${DIM}${used}/${maxCtx}${RESET} (${pctStr})${infl}\n`,
     );
   } catch (err) {
     process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);

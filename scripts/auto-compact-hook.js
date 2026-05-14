@@ -31,15 +31,19 @@ async function main() {
     const outputTokens = usage.outputTokens || 0;
     const totalUsed = inputTokens + outputTokens;
 
-    // Determina contesto massimo
+    // Determina contesto massimo: priorità al modello reale, fallback al tier
     let maxContext = 200_000;
+    let foundModel = false;
     if (config.models && Array.isArray(config.models)) {
       const entry = config.models.find(
         (m) => m.id === model || model.includes(m.id),
       );
-      if (entry && entry.context) maxContext = entry.context;
+      if (entry && entry.context) {
+        maxContext = entry.context;
+        foundModel = true;
+      }
     }
-    if (tier && config.claude && config.claude[tier]) {
+    if (!foundModel && tier && config.claude && config.claude[tier]) {
       maxContext = config.claude[tier];
     }
 
