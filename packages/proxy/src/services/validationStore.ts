@@ -16,8 +16,8 @@ import { join } from 'path';
 import os from 'os';
 import type { ValidationResult } from '../adapters/interface.js';
 
-const VALIDATION_DIR = join(os.homedir(), '.claude-code-proxy');
-const VALIDATION_FILE = join(VALIDATION_DIR, 'validation-results.json');
+const VALIDATION_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
+const VALIDATION_FILE = join(VALIDATION_DIR, 'data', 'validation-results.json');
 
 /**
  * ValidationStoreService — persists provider validation results to disk

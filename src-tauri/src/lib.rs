@@ -87,7 +87,7 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
         cmd.stdout(std::process::Stdio::null());
 
         // Write PID to file for external tracking
-        let pid_dir = format!("{}/.claude-code-proxy", home);
+        let pid_dir = format!("{}/.claude/claude-code-proxy", home);
         let _ = std::fs::create_dir_all(&pid_dir);
 
         match cmd.spawn() {

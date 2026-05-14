@@ -4,7 +4,7 @@
  * Shows model, provider, tier, context usage in terminal-friendly format
  * Colori: \x1b[2m = dim, \x1b[0m = reset
  *
- * Usage: node ~/.claude-code-proxy/scripts/context-status.js
+ * Usage: node ~/.claude/claude-code-proxy/scripts/context-status.js
  * Returns: "deepseek-v4-flash (opencode-go) | ████░░░░ 45k/128k (35%) | ×1.0"
  *
  * For status line integration, add this to ~/.claude/settings.json:

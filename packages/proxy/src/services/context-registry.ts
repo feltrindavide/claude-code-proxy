@@ -112,7 +112,7 @@ export interface LastContextUsage {
 // Percorsi e default
 // ---------------------------------------------------------------------------
 
-const CONFIG_DIR = join(homedir(), '.claude-code-proxy');
+const CONFIG_DIR = join(homedir(), '.claude', 'claude-code-proxy');
 const CONFIG_FILE = join(CONFIG_DIR, 'proxy-context.json');
 
 const DEFAULT_CONTEXT: ProxyContext = {

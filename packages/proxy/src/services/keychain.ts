@@ -10,8 +10,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
-const CONFIG_DIR = join(homedir(), '.claude-code-proxy');
-const SECRETS_FILE = join(CONFIG_DIR, 'secrets.json');
+const CONFIG_DIR = join(homedir(), '.claude', 'claude-code-proxy');
+const SECRETS_FILE = join(CONFIG_DIR, 'data', 'secrets.json');
 
 // Simple XOR key for obfuscation (not cryptographic security)
 // This prevents casual reading of keys in the file while allowing

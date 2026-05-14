@@ -95,7 +95,7 @@ export function StatusPage() {
 
   const showBanner = lastError && lastError !== dismissedError;
 
-  const zshrcSnippet = `export ANTHROPIC_BASE_URL="http://localhost:3456"\nsource ~/.claude-code-proxy/models.sh`;
+  const zshrcSnippet = `export ANTHROPIC_BASE_URL="http://localhost:3456"\nsource ~/.claude/claude-code-proxy/models.sh`;
 
   async function copyZshrcSnippet() {
     try {
@@ -201,7 +201,7 @@ export function StatusPage() {
             {'\n'}
             <span className="text-[#6a9955]"># Modelli configurati (auto-aggiornati dal proxy)</span>{'\n'}
             <span className="text-[#569cd6]">source </span>
-            <span className="text-[#ce9178]">~/.claude-code-proxy/models.sh</span>
+            <span className="text-[#ce9178]">~/.claude/claude-code-proxy/models.sh</span>
           </pre>
         </div>
       </div>

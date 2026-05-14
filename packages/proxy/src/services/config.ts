@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { ProxyConfig, LLMProvider, ModelRoute, ClaudeTier } from '../types/index.js';
 
 // Config directory and file paths
-const CONFIG_DIR = join(os.homedir(), '.claude-code-proxy');
+const CONFIG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
 // Zod validation schemas (per RESEARCH security domain — V5 Input Validation)
@@ -225,7 +225,7 @@ export class ConfigService {
   createBackup(): string {
     const config = this.load();
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupPath = join(this.configDir, `config-backup-${timestamp}.json`);
+    const backupPath = join(this.configDir, 'config-backup', `config-backup-${timestamp}.json`);
 
     // Ensure directory exists
     if (!existsSync(this.configDir)) {

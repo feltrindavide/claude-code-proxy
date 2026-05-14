@@ -16,8 +16,8 @@ import os from 'os';
 
 // Constants
 const DEFAULT_RPM = 60; // D-62
-const CONFIG_DIR = join(os.homedir(), '.claude-code-proxy');
-const CONFIG_FILE = join(CONFIG_DIR, 'rate-limits.json');
+const CONFIG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
+const CONFIG_FILE = join(CONFIG_DIR, 'data', 'rate-limits.json');
 
 /**
  * RateLimiterService — manages per-provider rate limiting via Bottleneck

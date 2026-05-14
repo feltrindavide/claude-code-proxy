@@ -186,6 +186,73 @@ app.get('/v1/models', (req, res) => {
   app.post('/v1/messages', express.json({ limit: '32mb' }), requestLoggerMiddleware, rateLimitMiddleware, handleProxyRequest);
 
 /**
+ * Migrazione: ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/
+ * Eseguita PRIMA di loadConfigOnStartup() per garantire che config.json sia già
+ * nella nuova posizione quando i servizi vengono caricati.
+ */
+function migrateFromOldPath(): void {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return;
+
+  const oldDir = path.join(home, '.claude-code-proxy');
+  const newDir = path.join(home, '.claude', 'claude-code-proxy');
+  if (!fs.existsSync(oldDir) || fs.existsSync(newDir)) return;
+
+  try {
+    console.log('[Setup] Migrating ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/');
+    const mk = (p: string) => fs.mkdirSync(p, { recursive: true, mode: 0o700 });
+    const cp = (src: string, dest: string) => {
+      if (fs.existsSync(src)) fs.writeFileSync(dest, fs.readFileSync(src, 'utf-8'), { mode: 0o600 });
+    };
+
+    mk(newDir);
+    mk(path.join(newDir, 'data'));
+    mk(path.join(newDir, 'logs'));
+    mk(path.join(newDir, 'config-backup'));
+    mk(path.join(newDir, 'scripts'));
+
+    // Copia file root
+    cp(path.join(oldDir, 'config.json'), path.join(newDir, 'config.json'));
+    cp(path.join(oldDir, 'proxy-context.json'), path.join(newDir, 'proxy-context.json'));
+    cp(path.join(oldDir, 'models.sh'), path.join(newDir, 'models.sh'));
+    cp(path.join(oldDir, 'proxy.pid'), path.join(newDir, 'proxy.pid'));
+    cp(path.join(oldDir, 'proxy-startup.log'), path.join(newDir, 'logs', 'startup.log'));
+
+    // Copia in data/
+    cp(path.join(oldDir, 'secrets.json'), path.join(newDir, 'data', 'secrets.json'));
+    cp(path.join(oldDir, 'rate-limits.json'), path.join(newDir, 'data', 'rate-limits.json'));
+    cp(path.join(oldDir, 'validation-results.json'), path.join(newDir, 'data', 'validation-results.json'));
+    cp(path.join(oldDir, 'request-log.json'), path.join(newDir, 'data', 'request-log.json'));
+
+    // Copia scripts/
+    const oldScripts = path.join(oldDir, 'scripts');
+    if (fs.existsSync(oldScripts)) {
+      for (const f of fs.readdirSync(oldScripts)) {
+        const src = path.join(oldScripts, f);
+        const dest = path.join(newDir, 'scripts', f);
+        fs.writeFileSync(dest, fs.readFileSync(src, 'utf-8'), { mode: 0o755 });
+      }
+    }
+
+    // Sposta backup sparsi in config-backup/
+    for (const f of fs.readdirSync(oldDir)) {
+      if (f.startsWith('config-backup-')) {
+        cp(path.join(oldDir, f), path.join(newDir, 'config-backup', f));
+      }
+    }
+
+    // Rimuovi vecchia dir (solo se la nuova è ok)
+    const verifyFile = path.join(newDir, 'config.json');
+    if (fs.existsSync(verifyFile)) {
+      fs.rmSync(oldDir, { recursive: true, force: true });
+      console.log('[Setup] Migration complete. Removed ~/.claude-code-proxy/');
+    }
+  } catch (err) {
+    console.warn('[Setup] Migration failed:', err instanceof Error ? err.message : 'unknown');
+  }
+}
+
+/**
  * Auto-install Claude Code proxy plugins e configura settings.json
  */
 function installPluginOnStartup(): void {
@@ -199,7 +266,7 @@ function installPluginOnStartup(): void {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (!home) return;
 
-  const scriptsDir = path.join(home, '.claude-code-proxy', 'scripts');
+  const scriptsDir = path.join(home, '.claude', 'claude-code-proxy', 'scripts');
   const skillDest = path.join(home, '.claude', 'skills', 'proxy-context', 'SKILL.md');
   const statusScriptDest = path.join(scriptsDir, 'context-status.js');
   const compactHookDest = path.join(scriptsDir, 'auto-compact-hook.js');
@@ -325,7 +392,7 @@ async function loadConfigOnStartup(): Promise<void> {
   // Write model env file for Claude Code
   writeModelEnvFile();
 
-  console.log(`[Proxy] Loaded ${config.providers.length} providers, ${config.routes.length} routes from ~/.claude-code-proxy/config.json`);
+  console.log(`[Proxy] Loaded ${config.providers.length} providers, ${config.routes.length} routes from ~/.claude/claude-code-proxy/config.json`);
 
   // Sync modelli con context-registry
   contextRegistry.syncFromConfig(config.providers);
@@ -336,7 +403,7 @@ async function loadConfigOnStartup(): Promise<void> {
 
   // Load request log from disk (04-01)
   requestLogService.load();
-  console.log('[Proxy] Request log loaded from ~/.claude-code-proxy/request-log.json');
+  console.log('[Proxy] Request log loaded from ~/.claude/claude-code-proxy/data/request-log.json');
 
   // Validate all providers on startup (per D-22)
   // Logs warnings for failures but doesn't block startup
@@ -428,6 +495,8 @@ app.put('/admin/context', express.json(), (req, res) => {
  * Start the Express server
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
+  // Migrazione prima di tutto: ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/
+  migrateFromOldPath();
   // Ensure proxy-context.json esiste
   contextRegistry.ensureDefaults();
   // Load config and validate providers on startup (01-03: per D-13, MAP-03; 02-03: per D-22)

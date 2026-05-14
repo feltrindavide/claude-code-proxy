@@ -13,8 +13,8 @@ import os from 'os';
 import type { RequestLogEntry, ClaudeTier } from '../types/index.js';
 
 // Log directory and file paths
-const LOG_DIR = join(os.homedir(), '.claude-code-proxy');
-const LOG_FILE = join(LOG_DIR, 'request-log.json');
+const LOG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
+const LOG_FILE = join(LOG_DIR, 'data', 'request-log.json');
 const MAX_ENTRIES = 50;
 const BODY_TRUNCATE_LIMIT = 2048; // 2KB truncation limit per D-48
 

@@ -34,7 +34,7 @@ import http from 'http';
 // ---------------------------------------------------------------------------
 
 const PROXY_URL = 'http://localhost:3456';
-const CONFIG_DIR = join(homedir(), '.claude-code-proxy');
+const CONFIG_DIR = join(homedir(), '.claude', 'claude-code-proxy');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 const KEYCHAIN_SERVICE = 'claude-code-proxy';
 const MARKER = 'ANTHROPIC_BASE_URL';
@@ -595,7 +595,7 @@ async function installProxyContextPlugin(dryRun: boolean): Promise<void> {
 
   const skillDir = join(homedir(), '.claude', 'skills', 'proxy-context');
   const skillDest = join(skillDir, 'SKILL.md');
-  const scriptsDir = join(homedir(), '.claude-code-proxy', 'scripts');
+  const scriptsDir = join(homedir(), '.claude', 'claude-code-proxy', 'scripts');
   const scriptDest = join(scriptsDir, 'context-status.js');
 
   if (dryRun) {

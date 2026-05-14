@@ -9,7 +9,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { providerService } from './provider.js';
 
-const CONFIG_DIR = join(homedir(), '.claude-code-proxy');
+const CONFIG_DIR = join(homedir(), '.claude', 'claude-code-proxy');
 const ENV_FILE = join(CONFIG_DIR, 'models.sh');
 
 /**
