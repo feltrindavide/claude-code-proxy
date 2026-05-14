@@ -11,7 +11,58 @@ import { homedir } from 'os';
 import { join } from 'path';
 
 // ---------------------------------------------------------------------------
-// Types
+// Mappa contesti noti (verificati su OpenRouter API)
+// ---------------------------------------------------------------------------
+const KNOWN_CONTEXTS: Record<string, { context: number; max_output: number }> = {
+  // DeepSeek
+  'deepseek-v4-flash': { context: 1_048_576, max_output: 131_072 },
+  'deepseek-v4-pro': { context: 1_048_576, max_output: 384_000 },
+  'deepseek/deepseek-v4-flash': { context: 1_048_576, max_output: 131_072 },
+  'deepseek/deepseek-v4-flash:free': { context: 256_000, max_output: 256_000 },
+  'deepseek/deepseek-v4-pro': { context: 1_048_576, max_output: 384_000 },
+  // Qwen
+  'qwen3.6-plus': { context: 1_000_000, max_output: 65_536 },
+  'qwen3.5-plus': { context: 1_000_000, max_output: 65_536 },
+  // MiniMax
+  'minimax-m2.7': { context: 196_608, max_output: 131_072 },
+  'minimax-m2.5': { context: 131_072, max_output: 131_072 },
+  'minimax-m2.5-free': { context: 131_072, max_output: 131_072 },
+  // Kimi
+  'moonshotai/kimi-k2.6': { context: 262_142, max_output: 262_142 },
+  'kimi-k2.6': { context: 262_142, max_output: 262_142 },
+  // GLM / Z.AI
+  'z-ai/glm-4.5-air:free': { context: 131_072, max_output: 96_000 },
+  // Mimo
+  'mimo-v2-pro': { context: 1_048_576, max_output: 131_072 },
+  'mimo-v2-omni': { context: 1_048_576, max_output: 65_536 },
+  // Gemini
+  'gemini-3.1-pro': { context: 1_048_576, max_output: 65_536 },
+  'gemini-3-flash': { context: 1_048_576, max_output: 65_536 },
+  // Inclusion AI
+  'inclusionai/ring-2.6-1t:free': { context: 262_144, max_output: 65_536 },
+  // NVIDIA
+  'nvidia/nemotron-3-super-120b-a12b:free': { context: 262_144, max_output: 262_144 },
+  'nemotron-3-super-free': { context: 262_144, max_output: 262_144 },
+  // OpenRouter
+  'openrouter/owl-alpha': { context: 1_048_756, max_output: 262_144 },
+  // OpenAI
+  'openai/gpt-oss-120b:free': { context: 131_072, max_output: 131_072 },
+  // Claude (via OpenRouter / API)
+  'claude-opus-4-7': { context: 1_000_000, max_output: 8_192 },
+  'claude-sonnet-4-6': { context: 1_000_000, max_output: 8_192 },
+  'claude-haiku-4-5': { context: 200_000, max_output: 8_192 },
+  // Altri
+  'trinity-large-preview-free': { context: 131_072, max_output: 131_072 },
+  'hy3-preview': { context: 131_072, max_output: 65_536 },
+};
+
+function getModelDefaults(modelId: string): { context: number; max_output: number } | null {
+  const key = modelId.toLowerCase();
+  return KNOWN_CONTEXTS[key] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Tipi
 // ---------------------------------------------------------------------------
 
 export interface ModelContextEntry {
@@ -124,11 +175,12 @@ export class ContextRegistry {
         if (known.has(key)) {
           nuovi.push(known.get(key)!);
         } else {
+          const defaults = getModelDefaults(id);
           nuovi.push({
             id,
             provider: p.name,
-            context: ctx.default_context,
-            max_output: ctx.default_max_output,
+            context: defaults?.context ?? ctx.default_context,
+            max_output: defaults?.max_output ?? ctx.default_max_output,
           });
         }
       }
