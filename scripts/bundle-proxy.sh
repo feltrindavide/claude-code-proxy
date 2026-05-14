@@ -15,7 +15,16 @@ npx esbuild "$PROXY_SRC/src/index.ts" \
   --format=cjs \
   --target=node22 \
   --outfile="$BUNDLE_DIR/dist/index.cjs" \
+  --loader:.wasm=copy \
   2>&1
+
+# Copy tiktoken WASM binary (esbuild copies it to dist/ but it needs to be alongside)
+# With --loader:.wasm=copy, esbuild places tiktoken_bg.wasm next to the output
+# We also ensure a fallback copy in the dist dir for tiktoken's runtime resolution
+if [ -f "node_modules/tiktoken/tiktoken_bg.wasm" ]; then
+  cp node_modules/tiktoken/tiktoken_bg.wasm "$BUNDLE_DIR/dist/"
+  echo ">>> tiktoken WASM copied to dist/"
+fi
 
 # Copy frontend static files into the bundle
 WEB_OUT="apps/web/out"
