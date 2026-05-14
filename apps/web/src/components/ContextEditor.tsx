@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -9,11 +9,6 @@ interface ModelEntry {
   provider: string;
   context: number;
   max_output: number;
-}
-
-interface ProviderModel {
-  name: string;
-  models: string[];
 }
 
 export function ContextEditor() {
@@ -96,6 +91,16 @@ export function ContextEditor() {
     }
   }
 
+  // Raggruppa modelli per provider
+  const groupedModels = useMemo(() => {
+    const groups: Record<string, ModelEntry[]> = {};
+    for (const m of models) {
+      if (!groups[m.provider]) groups[m.provider] = [];
+      groups[m.provider].push(m);
+    }
+    return groups;
+  }, [models]);
+
   if (loading) {
     return <p className="text-body">Loading model context...</p>;
   }
@@ -109,17 +114,17 @@ export function ContextEditor() {
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-hairline">
-                <th className="py-sm pr-md text-small text-muted font-medium">Tier</th>
-                <th className="py-sm text-small text-muted font-medium">Context (tokens)</th>
+                <th className="py-3 pr-4 text-sm text-muted font-medium">Tier</th>
+                <th className="py-3 text-sm text-muted font-medium">Context (tokens)</th>
               </tr>
             </thead>
             <tbody>
               {['opus', 'sonnet', 'haiku'].map(tier => (
-                <tr key={tier} className="border-b border-hairline last:border-0">
-                  <td className="py-sm pr-md">
+                <tr key={tier} className="border-b border-hairline last:border-b-0">
+                  <td className="py-3 pr-4">
                     <span className="font-mono text-sm text-ink capitalize">{tier}</span>
                   </td>
-                  <td className="py-sm">
+                  <td className="py-3">
                     <input
                       type="number"
                       value={claudeTiers[tier] ?? 200000}
@@ -136,54 +141,71 @@ export function ContextEditor() {
         </div>
       </Card>
 
-      {/* Mapped models from Model Library */}
+      {/* Mapped models from Model Library, raggruppati per provider */}
       <Card title="Model Library Context">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-hairline">
-                <th className="py-sm pr-md text-small text-muted font-medium">Model</th>
-                <th className="py-sm pr-md text-small text-muted font-medium">Provider</th>
-                <th className="py-sm pr-md text-small text-muted font-medium">Context (tokens)</th>
-                <th className="py-sm text-small text-muted font-medium">Max Output</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m, i) => (
-                <tr key={`${m.provider}:${m.id}`} className="border-b border-hairline last:border-0">
-                  <td className="py-sm pr-md">
-                    <span className="font-mono text-sm text-ink">{m.id}</span>
-                  </td>
-                  <td className="py-sm pr-md">
-                    <span className="text-small text-muted">{m.provider}</span>
-                  </td>
-                  <td className="py-sm pr-md">
-                    <input
-                      type="number"
-                      value={m.context}
-                      onChange={(e) => updateModel(i, 'context', e.target.value)}
-                      className="w-32 bg-surface-card text-ink border border-hairline rounded-md text-sm focus-ring h-8 px-2"
-                      min={1024}
-                      step={1024}
-                    />
-                  </td>
-                  <td className="py-sm">
-                    <input
-                      type="number"
-                      value={m.max_output}
-                      onChange={(e) => updateModel(i, 'max_output', e.target.value)}
-                      className="w-28 bg-surface-card text-ink border border-hairline rounded-md text-sm focus-ring h-8 px-2"
-                      min={256}
-                      step={256}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {models.length === 0 && (
-          <p className="text-body py-lg text-center">No models in library. Go to Models page first.</p>
+        {models.length === 0 ? (
+          <p className="text-body py-6 text-center">No models in library. Go to Models page first.</p>
+        ) : (
+          <div className="space-y-6">
+            {Object.entries(groupedModels).map(([provider, providerModels]) => (
+              <div key={provider}>
+                {/* Provider header */}
+                <h3 className="text-sm font-semibold text-muted uppercase tracking-wider mb-2">
+                  {provider}
+                </h3>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-hairline">
+                        <th className="py-3 pr-4 text-sm text-muted font-medium">Model</th>
+                        <th className="py-3 pr-4 text-sm text-muted font-medium">Context (tokens)</th>
+                        <th className="py-3 text-sm text-muted font-medium">Max Output</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {providerModels.map((m, i) => {
+                        // Trova indice globale per updateModel
+                        const globalIdx = models.findIndex(
+                          (mm) => mm.provider === m.provider && mm.id === m.id
+                        );
+                        return (
+                          <tr
+                            key={`${m.provider}:${m.id}`}
+                            className="border-b border-hairline last:border-b-0"
+                          >
+                            <td className="py-3 pr-4">
+                              <span className="font-mono text-sm text-ink">{m.id}</span>
+                            </td>
+                            <td className="py-3 pr-4">
+                              <input
+                                type="number"
+                                value={m.context}
+                                onChange={(e) => updateModel(globalIdx, 'context', e.target.value)}
+                                className="w-32 bg-surface-card text-ink border border-hairline rounded-md text-sm focus-ring h-8 px-2"
+                                min={1024}
+                                step={1024}
+                              />
+                            </td>
+                            <td className="py-3">
+                              <input
+                                type="number"
+                                value={m.max_output}
+                                onChange={(e) => updateModel(globalIdx, 'max_output', e.target.value)}
+                                className="w-28 bg-surface-card text-ink border border-hairline rounded-md text-sm focus-ring h-8 px-2"
+                                min={256}
+                                step={256}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </Card>
 
@@ -193,7 +215,7 @@ export function ContextEditor() {
         </Button>
       </div>
 
-      <div className="text-small text-muted space-y-xs">
+      <div className="text-sm text-muted space-y-1">
         <p><strong>Context</strong>: limite di input del modello (es. DeepSeek = 131.072)</p>
         <p><strong>Max Output</strong>: limite di output tokens per richiesta (es. DeepSeek = 8.192)</p>
         <p><strong>Claude Official</strong>: contesto dei tier Claude ufficiali (riferimento per inflation)</p>
