@@ -38,6 +38,7 @@ export function ModelMappingForm() {
   const { toast } = useToast();
   const [routes, setRoutes] = useState<RouteEntry[]>(defaultRoutes);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [autoCompactThreshold, setAutoCompactThreshold] = useState(0.7);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -47,9 +48,10 @@ export function ModelMappingForm() {
 
   async function loadData() {
     try {
-      const [routesData, providersData] = await Promise.all([
+      const [routesData, providersData, compactData] = await Promise.all([
         fetchRoutes(),
         fetchProviders(),
+        fetch('http://localhost:3456/admin/auto-compact').then(r => r.json()).catch(() => ({ threshold: 0.7 })),
       ]);
 
       // New API returns { routes, subagentModel }
@@ -62,6 +64,7 @@ export function ModelMappingForm() {
       });
       setRoutes(merged);
       setProviders(providersData);
+      setAutoCompactThreshold(compactData.threshold ?? 0.7);
     } catch {
       // Use defaults on error
     } finally {
@@ -93,10 +96,17 @@ export function ModelMappingForm() {
   async function handleSave() {
     setSaving(true);
     try {
-      await saveRoutes(routes);
-      toast('Model mappings saved', 'success');
+      await Promise.all([
+        saveRoutes(routes),
+        fetch('http://localhost:3456/admin/auto-compact', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threshold: autoCompactThreshold }),
+        }),
+      ]);
+      toast('Settings saved', 'success');
     } catch {
-      toast('Failed to save model mappings', 'error');
+      toast('Failed to save settings', 'error');
     } finally {
       setSaving(false);
     }
@@ -156,6 +166,28 @@ export function ModelMappingForm() {
           );
         })}
       </div>
+
+      {/* Auto-compact threshold */}
+      <Card title="Auto Compact" className="mt-lg">
+        <p className="text-body text-muted mb-md">
+          When context usage reaches this percentage, the proxy will suggest compacting
+          the conversation to avoid hitting the context limit.
+        </p>
+        <div className="flex items-center gap-md">
+          <input
+            type="range"
+            min={0.3}
+            max={0.95}
+            step={0.05}
+            value={autoCompactThreshold}
+            onChange={(e) => setAutoCompactThreshold(parseFloat(e.target.value))}
+            className="flex-1 h-2 bg-hairline rounded-full appearance-none cursor-pointer accent-primary"
+          />
+          <span className="font-mono text-sm text-ink w-16 text-right">
+            {Math.round(autoCompactThreshold * 100)}%
+          </span>
+        </div>
+      </Card>
 
       <div className="mt-lg">
         <Button

@@ -33,6 +33,7 @@ export interface ProxyConfig {
   providers: LLMProvider[];
   routes: ModelRoute[];
   subagentModel?: string; // Model to use for subagent tasks
+  autoCompactThreshold?: number; // % di contesto per auto-compact (0-1, default 0.7)
 }
 
 export interface RouteResolution {

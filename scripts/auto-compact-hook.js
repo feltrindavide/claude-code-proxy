@@ -3,30 +3,24 @@
  * Auto-compact hook per Claude Code Proxy
  *
  * PostToolUse hook: dopo ogni tool call, controlla il contesto proxy.
- * Se > soglia, suggerisce a Claude Code di compattare.
+ * Se > soglia (configurabile da dashboard al 70% default), suggerisce compact.
  *
- * Installazione in ~/.claude/settings.json:
- *   "PostToolUse": [{
- *     "matcher": "Bash|Write|Edit",
- *     "hooks": [{
- *       "type": "command",
- *       "command": "\"...node\" \"...auto-compact-hook.js\"",
- *       "timeout": 5
- *     }]
- *   }]
+ * Installato automaticamente da installPluginOnStartup() nel proxy.
  */
-
-// Soglia: quando il contesto supera questa %, inietta compact
-const COMPACT_THRESHOLD = 0.7; // 70%
 
 async function main() {
   try {
-    const resp = await fetch('http://localhost:3456/admin/context', {
-      signal: AbortSignal.timeout(2000),
-    });
-    if (!resp.ok) process.exit(0);
+    const [ctxResp, configResp] = await Promise.all([
+      fetch('http://localhost:3456/admin/context', { signal: AbortSignal.timeout(2000) }),
+      fetch('http://localhost:3456/admin/auto-compact', { signal: AbortSignal.timeout(2000) }),
+    ]);
 
-    const data = await resp.json();
+    if (!ctxResp.ok || !configResp.ok) process.exit(0);
+
+    const data = await ctxResp.json();
+    const { threshold } = await configResp.json();
+    const compactThreshold = threshold ?? 0.7;
+
     const usage = data.lastUsage || {};
     const config = data.config || {};
 
@@ -45,22 +39,25 @@ async function main() {
       );
       if (entry && entry.context) maxContext = entry.context;
     }
-    if (tier && config.claude && config.claude[tier] && !maxContext) {
+    if (tier && config.claude && config.claude[tier]) {
       maxContext = config.claude[tier];
     }
 
     const pct = totalUsed / maxContext;
 
-    if (pct >= COMPACT_THRESHOLD) {
+    if (pct >= compactThreshold) {
       const pctDisplay = Math.round(pct * 100);
       const usedDisplay = Math.round(totalUsed / 1000);
       const maxDisplay = Math.round(maxContext / 1000);
-      const compactTokens = Math.round(totalUsed * 0.6); // compact to ~60%
+      const pctLabel = Math.round(compactThreshold * 100);
 
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PostToolUse',
-          additionalContext: `[Context Alert] ${pctDisplay}% of context used (${usedDisplay}k/${maxDisplay}k). Consider compacting to ~${Math.round(compactTokens/1000)}k tokens to avoid hitting the limit.`,
+          additionalContext:
+            `[Proxy Context ${pctDisplay}%] ${usedDisplay}k/${maxDisplay}k tokens used ` +
+            `(${provider}/${model}). Consider compacting or the conversation may hit the ` +
+            `${maxDisplay}k limit soon.`,
         },
       }));
     }

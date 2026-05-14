@@ -61,6 +61,7 @@ export const proxyConfigSchema = z.object({
   providers: z.array(llmProviderSchema),
   routes: z.array(modelRouteSchema),
   subagentModel: z.string().optional(),
+  autoCompactThreshold: z.number().min(0).max(1).optional(),
 });
 
 export type AppConfig = z.infer<typeof proxyConfigSchema>;
@@ -142,6 +143,7 @@ export class ConfigService {
         { claudeTier: 'sonnet', providerName: 'openrouter', targetModel: 'mimo-v2-flash' },
         { claudeTier: 'haiku', providerName: 'opencode', targetModel: 'nvidia/nemotron-3-super-120b-a12b:free' },
       ],
+      autoCompactThreshold: 0.7,
     };
   }
 

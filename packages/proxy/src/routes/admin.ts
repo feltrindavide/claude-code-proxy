@@ -399,6 +399,36 @@ router.post('/config/import', (req, res) => {
 });
 
 /**
+ * GET/PUT /admin/auto-compact
+ * Soglia percentuale per auto-compact (0-1, default 0.7)
+ */
+router.get('/auto-compact', (req, res) => {
+  try {
+    const config = configService.load();
+    res.json({ threshold: config.autoCompactThreshold ?? 0.7 });
+  } catch (error) {
+    console.error('[Admin] Error loading auto-compact threshold:', error);
+    res.status(500).json({ error: 'Failed to load threshold' });
+  }
+});
+
+router.put('/auto-compact', (req, res) => {
+  try {
+    const threshold = parseFloat(req.body.threshold);
+    if (isNaN(threshold) || threshold < 0 || threshold > 1) {
+      return res.status(400).json({ error: 'threshold must be a number between 0 and 1' });
+    }
+    const config = configService.load();
+    config.autoCompactThreshold = threshold;
+    configService.save(config);
+    res.json({ success: true, threshold });
+  } catch (error) {
+    console.error('[Admin] Error saving auto-compact threshold:', error);
+    res.status(500).json({ error: 'Failed to save threshold' });
+  }
+});
+
+/**
  * POST /admin/config/diff
  * Return current (masked) vs incoming config for frontend diffing
  * Phase: 04-model-mapping-ui-routing-log

@@ -41,6 +41,7 @@ PLUGIN_DIR="$BUNDLE_DIR/plugins/proxy-context"
 mkdir -p "$PLUGIN_DIR"
 cp scripts/plugins/proxy-context/SKILL.md "$PLUGIN_DIR/"
 cp scripts/context-status.js "$BUNDLE_DIR/plugins/"
+cp scripts/auto-compact-hook.js "$BUNDLE_DIR/plugins/"
 echo ">>> Plugin files copied ($(du -sh $PLUGIN_DIR | cut -f1))"
 
 # Package type with version from Tauri config

@@ -186,24 +186,29 @@ app.get('/v1/models', (req, res) => {
   app.post('/v1/messages', express.json({ limit: '32mb' }), requestLoggerMiddleware, rateLimitMiddleware, handleProxyRequest);
 
 /**
- * Auto-install Claude Code proxy-context plugin if bundled files exist
- * but target files in ~/.claude/skills/ are missing.
+ * Auto-install Claude Code proxy plugins e configura settings.json
  */
 function installPluginOnStartup(): void {
   const pluginSrcDir = path.join(__dirname, '../plugins');
   const skillSrc = path.join(pluginSrcDir, 'proxy-context', 'SKILL.md');
-  const scriptSrc = path.join(pluginSrcDir, 'context-status.js');
+  const statusScriptSrc = path.join(pluginSrcDir, 'context-status.js');
+  const compactHookSrc = path.join(pluginSrcDir, 'auto-compact-hook.js');
 
-  if (!fs.existsSync(skillSrc) && !fs.existsSync(scriptSrc)) return; // no bundled files
+  if (!fs.existsSync(skillSrc) && !fs.existsSync(statusScriptSrc)) return;
 
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (!home) return;
 
+  const scriptsDir = path.join(home, '.claude-code-proxy', 'scripts');
   const skillDest = path.join(home, '.claude', 'skills', 'proxy-context', 'SKILL.md');
-  const scriptDest = path.join(home, '.claude-code-proxy', 'scripts', 'context-status.js');
+  const statusScriptDest = path.join(scriptsDir, 'context-status.js');
+  const compactHookDest = path.join(scriptsDir, 'auto-compact-hook.js');
+  const settingsPath = path.join(home, '.claude', 'settings.json');
+  const nodeBin = process.argv[0]; // full path to node binary
 
   let installed = false;
 
+  // Installa SKILL.md
   if (fs.existsSync(skillSrc) && !fs.existsSync(skillDest)) {
     fs.mkdirSync(path.dirname(skillDest), { recursive: true, mode: 0o700 });
     fs.writeFileSync(skillDest, fs.readFileSync(skillSrc, 'utf-8'), { mode: 0o600 });
@@ -211,15 +216,93 @@ function installPluginOnStartup(): void {
     installed = true;
   }
 
-  if (fs.existsSync(scriptSrc) && !fs.existsSync(scriptDest)) {
-    fs.mkdirSync(path.dirname(scriptDest), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(scriptDest, fs.readFileSync(scriptSrc, 'utf-8'), { mode: 0o755 });
-    console.log('[Setup] Installed context-status script →', scriptDest);
+  // Installa context-status.js
+  if (fs.existsSync(statusScriptSrc) && !fs.existsSync(statusScriptDest)) {
+    fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(statusScriptDest, fs.readFileSync(statusScriptSrc, 'utf-8'), { mode: 0o755 });
+    console.log('[Setup] Installed context-status script →', statusScriptDest);
     installed = true;
   }
 
+  // Installa auto-compact-hook.js
+  if (fs.existsSync(compactHookSrc) && !fs.existsSync(compactHookDest)) {
+    fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(compactHookDest, fs.readFileSync(compactHookSrc, 'utf-8'), { mode: 0o755 });
+    console.log('[Setup] Installed auto-compact hook →', compactHookDest);
+    installed = true;
+  }
+
+  // Aggiorna settings.json con status line e hook (solo se non già presenti)
+  const statusLineCmd = `"${nodeBin}" "${statusScriptDest}"`;
+  const compactHookCmd = `"${nodeBin}" "${compactHookDest}"`;
+
+  try {
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(settingsPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      } catch {}
+    }
+
+    let changed = false;
+
+    // Status line - imposta solo se non già configurata
+    if (!settings.statusLine) {
+      settings.statusLine = {
+        type: 'command',
+        command: statusLineCmd,
+      };
+      console.log('[Setup] Added proxy-context status line to settings.json');
+      changed = true;
+    }
+
+    // Auto-compact hook - aggiungi ai PostToolUse se non presente
+    const hooksSetting = settings.hooks as Record<string, unknown> | undefined;
+    if (!hooksSetting) (settings as any).hooks = {};
+    const hk = settings.hooks as Record<string, unknown>;
+    if (!Array.isArray(hk.PostToolUse)) hk.PostToolUse = [];
+
+    const hooks = hk.PostToolUse as Array<Record<string, unknown>>;
+    const hasCompactHook = hooks.some((h: any) =>
+      Array.isArray(h.hooks) && h.hooks.some((hh: any) =>
+        typeof hh.command === 'string' && hh.command.includes('auto-compact-hook.js'),
+      ),
+    );
+
+    if (!hasCompactHook && fs.existsSync(compactHookDest)) {
+      // Add to existing matcher or create new one
+      const bashMatcher = hooks.find((h: any) => h.matcher === 'Bash|Edit|Write|MultiEdit|Agent|Task');
+      if (bashMatcher) {
+        const mHooks = bashMatcher.hooks as Array<Record<string, unknown>>;
+        if (Array.isArray(mHooks)) mHooks.push({
+          type: 'command',
+          command: compactHookCmd,
+          timeout: 5,
+        });
+      } else {
+        hooks.push({
+          matcher: 'Bash|Edit|Write|MultiEdit|Agent|Task',
+          hooks: [{
+            type: 'command',
+            command: compactHookCmd,
+            timeout: 5,
+          }],
+        });
+      }
+      console.log('[Setup] Added auto-compact hook to settings.json');
+      changed = true;
+    }
+
+    if (changed) {
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
+      console.log('[Setup] Updated ~/.claude/settings.json');
+    }
+  } catch (err) {
+    console.warn('[Setup] Could not update settings.json:', err instanceof Error ? err.message : 'unknown');
+  }
+
   if (installed) {
-    console.log('[Setup] Run /proxy-context in Claude Code to see model context usage');
+    console.log('[Setup] Proxy plugins installed. /proxy-context available in Claude Code.');
   }
 }
 
