@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
  * Context status line script for Claude Code Proxy
- * Shows model, folder, context usage in terminal-friendly format
- * Colori: \x1b[2m = dim, \x1b[0m = reset
+ * Legge session_id da stdin (passato da Claude Code/OpenCode) per mostrare
+ * i dati corretti per la sessione corrente.
  *
- * Usage: node ~/.claude/claude-code-proxy/scripts/context-status.js
- * Returns: "z-ai/glm-4.5-air:free │ nome-cartella │ ████░░░░ 45k/131k (35%)"
+ * Formato: "z-ai/glm-4.5-air:free │ cartella │ ████░░░░ 45k/131k (35%)"
  *
- * For status line integration, add this to ~/.claude/settings.json:
+ * Installazione in ~/.claude/settings.json:
  *   "statusLine": {
  *     "type": "command",
  *     "command": "\"...node\" \"...context-status.js\""
@@ -23,11 +22,50 @@ const RED = '\x1b[31m';
 
 const PROXY_URL = 'http://localhost:3456';
 
+/**
+ * Legge stdin con timeout. Claude Code passa JSON con session_id, model, cwd.
+ * Se stdin non arriva entro 2s, procede senza (fallback all'ultima sessione).
+ */
+function readStdin(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(null), 2000);
+    let input = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => { input += chunk; });
+    process.stdin.on('end', () => {
+      clearTimeout(timeout);
+      resolve(input || null);
+    });
+    // If stdin is not a TTY (piped), it will fire 'end'. If it's a TTY,
+    // the timeout will fire.
+    if (process.stdin.isTTY) {
+      clearTimeout(timeout);
+      resolve(null);
+    }
+  });
+}
+
 async function main() {
   try {
-    const resp = await fetch(`${PROXY_URL}/admin/context`, {
-      signal: AbortSignal.timeout(2000),
-    });
+    // 1. Leggi session_id da stdin
+    const stdinData = await readStdin();
+    let sessionId = '';
+    let folderFromStdin = '';
+
+    if (stdinData) {
+      try {
+        const parsed = JSON.parse(stdinData);
+        sessionId = parsed.session_id || '';
+        folderFromStdin = parsed.workspace?.current_dir || '';
+      } catch {}
+    }
+
+    // 2. Fetch contesto dal proxy (per-sessione se abbiamo sessionId)
+    const url = sessionId
+      ? `${PROXY_URL}/admin/context?session=${encodeURIComponent(sessionId)}`
+      : `${PROXY_URL}/admin/context`;
+
+    const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (!resp.ok) {
       process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);
       process.exit(0);
@@ -44,13 +82,12 @@ async function main() {
     const outputTokens = usage.outputTokens || 0;
     const totalUsed = inputTokens + outputTokens;
 
-    // Se non ci sono dati
     if (!model) {
       process.stdout.write(`${DIM}○ waiting for requests...${RESET}\n`);
       process.exit(0);
     }
 
-    // Determina contesto massimo: priorità al modello reale, fallback al tier
+    // 3. Contesto massimo: priorità al modello reale, fallback al tier
     let maxContext = 200_000;
     let foundModel = false;
     if (config.models && Array.isArray(config.models)) {
@@ -66,10 +103,10 @@ async function main() {
       maxContext = config.claude[tier];
     }
 
-    // Nome cartella corrente (da process.cwd)
-    const folder = process.cwd().split('/').pop() || '';
+    // 4. Nome cartella: da stdin > process.cwd > niente
+    const folder = (folderFromStdin || process.cwd()).split('/').pop() || '';
 
-    // Build progress bar (8 segments) with color
+    // 5. Progress bar (8 segmenti) con colore
     const pct = Math.min(100, Math.round((totalUsed / maxContext) * 100));
     const filled = Math.min(8, Math.round((pct / 100) * 8));
     const empty = 8 - filled;
@@ -80,7 +117,6 @@ async function main() {
 
     const bar = `${barColor}${'█'.repeat(filled)}${RESET}${DIM}${'░'.repeat(empty)}${RESET}`;
 
-    // Format numbers
     const fmt = (n) => {
       if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
       if (n >= 1_000) return Math.round(n / 1_000) + 'k';
@@ -93,8 +129,6 @@ async function main() {
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
     const pctStr = pctColor ? `${pctColor}${pct}%${RESET}` : `${pct}%`;
 
-    // Format: model │ folder │ ████░░░░ 45k/131k (35%) ×1.0
-    // Model in bold, folder dim, rest normal
     const folderTag = folder ? `${DIM}${folder}${RESET}` : '';
     process.stdout.write(
       `${BOLD}${model}${RESET}${folderTag ? ` ${DIM}│${RESET} ${folderTag}` : ''} ${DIM}│${RESET} ${bar} ${DIM}${used}/${maxCtx}${RESET} (${pctStr})${infl}\n`,
