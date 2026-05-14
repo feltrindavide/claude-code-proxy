@@ -18,19 +18,49 @@ export interface ContentChunk {
 }
 
 /**
- * Streaming parser for `<think>...</think>` tags in text content.
- * Some models emit reasoning as `<think>...</think>` inside the content field
+ * Streaming parser for `<think>...</think>` and `<reasoning_content>...</reasoning_content>` tags.
+ * Some models emit reasoning as HTML-like tags inside the content field
  * instead of using structured `reasoning_content`. This parser handles
  * partial tags at chunk boundaries by buffering.
  */
 export class ThinkTagParser {
   private buffer = '';
   private inThink = false;
-  private readonly openTag = '<think>';
-  private readonly closeTag = '</think>';
+  // Support both <think> and <reasoning_content> tags
+  private readonly openTags = ['<think>', '<reasoning_content>'];
+  private readonly closeTags = ['</think>', '</reasoning_content>'];
 
   get isInThinkMode(): boolean {
     return this.inThink;
+  }
+
+  /** Trova il primo open tag nella stringa */
+  private findOpenTag(buf: string): { tag: string; index: number } | null {
+    let earliest: { tag: string; index: number } | null = null;
+    for (const tag of this.openTags) {
+      const idx = buf.indexOf(tag);
+      if (idx !== -1 && (!earliest || idx < earliest.index)) {
+        earliest = { tag, index: idx };
+      }
+    }
+    return earliest;
+  }
+
+  /** Trova il primo close tag nella stringa */
+  private findCloseTag(buf: string): { tag: string; index: number } | null {
+    let earliest: { tag: string; index: number } | null = null;
+    for (const tag of this.closeTags) {
+      const idx = buf.indexOf(tag);
+      if (idx !== -1 && (!earliest || idx < earliest.index)) {
+        earliest = { tag, index: idx };
+      }
+    }
+    return earliest;
+  }
+
+  /** Determina se buf inizia con uno dei tag (per partial match) */
+  private startsWithAnyTag(buf: string, tags: string[]): boolean {
+    return tags.some(t => t.startsWith(buf));
   }
 
   feed(content: string): ContentChunk[] {
@@ -63,22 +93,22 @@ export class ThinkTagParser {
   }
 
   private parseOutsideThink(): ContentChunk | null {
-    const thinkStart = this.buffer.indexOf(this.openTag);
-    const orphanClose = this.buffer.indexOf(this.closeTag);
+    const open = this.findOpenTag(this.buffer);
+    const orphanClose = this.findCloseTag(this.buffer);
 
     // Orphan close tag without open
-    if (orphanClose !== -1 && (thinkStart === -1 || orphanClose < thinkStart)) {
-      const pre = this.buffer.slice(0, orphanClose);
-      this.buffer = this.buffer.slice(orphanClose + this.closeTag.length);
+    if (orphanClose && (!open || orphanClose.index < open.index)) {
+      const pre = this.buffer.slice(0, orphanClose.index);
+      this.buffer = this.buffer.slice(orphanClose.index + orphanClose.tag.length);
       return pre ? { type: 'text', content: pre } : null;
     }
 
-    if (thinkStart === -1) {
+    if (!open) {
       // Check for partial tag at end
       const lastBracket = this.buffer.lastIndexOf('<');
       if (lastBracket !== -1) {
         const potential = this.buffer.slice(lastBracket);
-        if (this.openTag.startsWith(potential) || this.closeTag.startsWith(potential)) {
+        if (this.startsWithAnyTag(potential, [...this.openTags, ...this.closeTags])) {
           const emit = this.buffer.slice(0, lastBracket);
           this.buffer = this.buffer.slice(lastBracket);
           return emit ? { type: 'text', content: emit } : null;
@@ -89,21 +119,21 @@ export class ThinkTagParser {
       return emit ? { type: 'text', content: emit } : null;
     }
 
-    // Found <think> tag
-    const pre = this.buffer.slice(0, thinkStart);
-    this.buffer = this.buffer.slice(thinkStart + this.openTag.length);
+    // Found open tag (think or reasoning_content)
+    const pre = this.buffer.slice(0, open.index);
+    this.buffer = this.buffer.slice(open.index + open.tag.length);
     this.inThink = true;
     return pre ? { type: 'text', content: pre } : null;
   }
 
   private parseInsideThink(): ContentChunk | null {
-    const thinkEnd = this.buffer.indexOf(this.closeTag);
+    const close = this.findCloseTag(this.buffer);
 
-    if (thinkEnd === -1) {
+    if (!close) {
       const lastBracket = this.buffer.lastIndexOf('<');
-      if (lastBracket !== -1 && this.buffer.length - lastBracket < this.closeTag.length) {
+      if (lastBracket !== -1) {
         const potential = this.buffer.slice(lastBracket);
-        if (this.closeTag.startsWith(potential)) {
+        if (this.startsWithAnyTag(potential, this.closeTags)) {
           const emit = this.buffer.slice(0, lastBracket);
           this.buffer = this.buffer.slice(lastBracket);
           return emit ? { type: 'thinking', content: emit } : null;
@@ -114,11 +144,70 @@ export class ThinkTagParser {
       return emit ? { type: 'thinking', content: emit } : null;
     }
 
-    const thinking = this.buffer.slice(0, thinkEnd);
-    this.buffer = this.buffer.slice(thinkEnd + this.closeTag.length);
+    const thinking = this.buffer.slice(0, close.index);
+    this.buffer = this.buffer.slice(close.index + close.tag.length);
     this.inThink = false;
     return thinking ? { type: 'thinking', content: thinking } : null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// ToolArgumentsParser — riparazione JSON malformati nelle tool call
+// ---------------------------------------------------------------------------
+
+/**
+ * Tenta di riparare JSON malformato nei parametri delle tool call.
+ * Strategy cascade: JSON.parse → regex repair → empty fallback.
+ * Non richiede dipendenze esterne (a differenza di jsonrepair/json5).
+ */
+export function parseToolArguments(argsString: string): string {
+  if (!argsString || argsString.trim() === '' || argsString === '{}') {
+    return '{}';
+  }
+
+  // Attempt 1: Standard JSON
+  try {
+    JSON.parse(argsString);
+    return argsString;
+  } catch {
+    // Prossimo tentativo
+  }
+
+  // Attempt 2: Repair common issues
+  try {
+    const repaired = argsString
+      // Unescape already-escaped quotes
+      .replace(/\\"/g, '"')
+      // Replace single quotes with double quotes (but not inside strings)
+      .replace(/'/g, '"')
+      // Add quotes to unquoted keys (word: before colons)
+      .replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/g, '$1"$2":')
+      // Remove trailing commas before } and ]
+      .replace(/,(\s*[}\]])/g, '$1')
+      // Remove trailing commas at end
+      .replace(/,\s*$/, '')
+      // Replace undefined/null unquoted with null
+      .replace(/\bundefined\b/g, 'null')
+      .replace(/\bNone\b/g, 'null')
+      .replace(/\bTrue\b/g, 'true')
+      .replace(/\bFalse\b/g, 'false');
+
+    JSON.parse(repaired);
+    return repaired;
+  } catch {
+    // Attempt 3: Extract any valid JSON object from the string
+    try {
+      const objMatch = argsString.match(/\{.*\}/s);
+      if (objMatch) {
+        JSON.parse(objMatch[0]);
+        return objMatch[0];
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  return '{}';
 }
 
 // ---------------------------------------------------------------------------

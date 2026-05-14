@@ -20,6 +20,7 @@ import { getOrCreateAdapter } from './adapters/index.js';
 import { providerService } from './services/provider.js';
 import { getKey } from './services/keychain.js';
 import { getUserFacingErrorMessage } from './services/sse-transformer.js';
+import { parseToolArguments } from './services/response-parsers.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 import { contextRegistry, type LastContextUsage } from './services/context-registry.js';
 
@@ -57,6 +58,57 @@ function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean
   res.end();
 }
 
+// ---------------------------------------------------------------------------
+// Subagent model tag — parsing <CCR-SUBAGENT-MODEL> dal system prompt
+// ---------------------------------------------------------------------------
+
+const SUBAGENT_TAG_RE = /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s;
+
+/**
+ * Cerca <CCR-SUBAGENT-MODEL>model</CCR-SUBAGENT-MODEL> nel system prompt.
+ * Se trovato, rimuove il tag e restituisce il model name.
+ * Il tag permette di specificare un modello diverso per agent/subagent.
+ */
+function extractSubagentModel(body: Record<string, unknown>): string | null {
+  const system = body.system;
+  if (!system) return null;
+
+  let systemStr: string;
+  if (typeof system === 'string') {
+    systemStr = system;
+  } else if (Array.isArray(system)) {
+    systemStr = system
+      .filter((b: any) => b.type === 'text')
+      .map((b: any) => b.text)
+      .join('\n');
+  } else {
+    return null;
+  }
+
+  const match = systemStr.match(SUBAGENT_TAG_RE);
+  if (!match) return null;
+
+  const modelName = match[1].trim();
+  if (!modelName) return null;
+
+  // Rimuovi il tag dal system prompt
+  const cleaned = systemStr.replace(SUBAGENT_TAG_RE, '').trim();
+  if (typeof body.system === 'string') {
+    body.system = cleaned;
+  } else if (Array.isArray(body.system)) {
+    // Replace text in the first text block
+    for (const b of body.system as any[]) {
+      if (b.type === 'text') {
+        b.text = b.text.replace(SUBAGENT_TAG_RE, '').trim();
+        break;
+      }
+    }
+  }
+
+  console.log(`[Proxy] Subagent model tag: using "${modelName}" instead of "${body.model}"`);
+  return modelName;
+}
+
 // Tracciamento ultimo utilizzo contesto
 export let lastContextUsage: LastContextUsage = {
   inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1,
@@ -73,6 +125,14 @@ export async function handleProxyRequest(
   // 1. Parse model from request body
   const body = req.body || {};
   let modelName = body.model || 'claude-opus-4-20250514';
+
+  // Subagent model tag: <CCR-SUBAGENT-MODEL>model</CCR-SUBAGENT-MODEL> in system prompt
+  // Permette di specificare un modello diverso per sessioni subagent
+  const subagentModel = extractSubagentModel(body);
+  if (subagentModel) {
+    modelName = subagentModel;
+  }
+
   let resolution: RouteResolution | null = null;
 
   // Decode gateway model IDs: "anthropic/{providerName}/{targetModel}"
@@ -143,6 +203,35 @@ export async function handleProxyRequest(
     if (hasRC > 0) {
       console.log(`[Proxy DEBUG] ${hasRC} assistant message(s) missing reasoning_content for DeepSeek!`);
     }
+  }
+
+  // Force Reasoning: se il modello non supporta thinking nativo, 
+  // converte i thinking block in <reasoning_content> e inietta un prompt
+  const forceReasoningModels: string[] = []; // Configurable: es. ['qwen', 'minimax']
+  const needsForceReasoning = forceReasoningModels.some(m =>
+    resolution.targetModel.toLowerCase().includes(m)
+  );
+  if (needsForceReasoning) {
+    const messages = (providerBody as any).messages || [];
+    // Wrap assistant thinking content in reasoning tags
+    for (const msg of messages) {
+      if (msg.role === 'assistant' && msg.content) {
+        if (typeof msg.content === 'string' && msg.content.includes('<thinking>')) {
+          msg.content = msg.content.replace(/<thinking>([\s\S]*?)<\/thinking>/g, '<reasoning_content>$1</reasoning_content>');
+        }
+      }
+    }
+    // Inject reasoning prompt in last user message
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === 'user') {
+      const prompt = '\n\nBefore answering, reason step-by-step inside <reasoning_content> tags. Then provide your final answer.';
+      if (typeof lastMsg.content === 'string') {
+        lastMsg.content += prompt;
+      } else if (Array.isArray(lastMsg.content)) {
+        lastMsg.content.push({ type: 'text', text: prompt });
+      }
+    }
+    console.log(`[Proxy] Force reasoning enabled for ${resolution.targetModel}`);
   }
 
   // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
@@ -301,21 +390,13 @@ export async function handleProxyRequest(
         content.push({ type: 'text', text: '(no output)' });
       }
       if (toolUseId) {
-        try {
-          content.push({
-            type: 'tool_use',
-            id: toolUseId,
-            name: toolUseName,
-            input: JSON.parse(toolUseInput || '{}'),
-          });
-        } catch {
-          content.push({
-            type: 'tool_use',
-            id: toolUseId,
-            name: toolUseName,
-            input: {},
-          });
-        }
+        const parsedInput = parseToolArguments(toolUseInput || '{}');
+        content.push({
+          type: 'tool_use',
+          id: toolUseId,
+          name: toolUseName,
+          input: JSON.parse(parsedInput),
+        });
       }
 
       const outTokens = Math.max(1, Math.round(contentText.length / 4));

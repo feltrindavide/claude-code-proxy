@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Context status script for Claude Code Proxy
- * Shows model context usage in terminal-friendly format
+ * Context status line script for Claude Code Proxy
+ * Shows model, provider, tier, context usage in terminal-friendly format
  *
  * Usage: node ~/.claude-code-proxy/scripts/context-status.js
- * Returns: "deepseek-v4-flash | ████░░░░ 45k/128k (35%)"
+ * Returns: "deepseek-v4-flash (opencode-go) | ████░░░░ 45k/128k (35%) | ×1.0"
  *
  * For status line integration, add this to ~/.claude/settings.json:
  *   "statusLine": {
@@ -30,9 +30,11 @@ async function main() {
     const config = data.config || {};
 
     const model = usage.model || 'unknown';
+    const provider = usage.provider || '';
+    const tier = usage.tier || '';
+    const inflation = usage.inflation || 1;
     const inputTokens = usage.inputTokens || 0;
     const outputTokens = usage.outputTokens || 0;
-    const tier = usage.tier || '';
 
     // Total tokens used (input + output)
     const totalUsed = inputTokens + outputTokens;
@@ -70,8 +72,11 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
+    const infl = inflation === 1 ? '' : ` ×${inflation.toFixed(1)}`;
+    const tierTag = tier ? ` [${tier}]` : '';
+    const provTag = provider ? ` (${provider})` : '';
 
-    console.log(`${model} | ${bar} ${used}/${maxCtx} (${pct}%)`);
+    console.log(`${model}${provTag}${tierTag} | ${bar} ${used}/${maxCtx} (${pct}%)${infl}`);
   } catch (err) {
     console.log('⚠ Proxy offline');
   }

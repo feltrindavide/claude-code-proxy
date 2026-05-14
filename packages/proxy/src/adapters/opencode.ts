@@ -31,7 +31,7 @@ import {
   mapStopReason,
   getUserFacingErrorMessage,
 } from '../services/sse-transformer.js';
-import { ThinkTagParser, HeuristicToolParser } from '../services/response-parsers.js';
+import { ThinkTagParser, HeuristicToolParser, parseToolArguments } from '../services/response-parsers.js';
 
 export class OpenCodeAdapter implements ProviderAdapter {
   readonly providerType: string = 'opencode';
