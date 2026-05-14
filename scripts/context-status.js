@@ -26,22 +26,16 @@ const PROXY_URL = 'http://localhost:3456';
  * Legge stdin con timeout. Claude Code passa JSON con session_id, model, cwd.
  * Se stdin non arriva entro 2s, procede senza (fallback all'ultima sessione).
  */
-function readStdin(): Promise<string | null> {
+function readStdin() {
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(null), 2000);
     let input = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { input += chunk; });
     process.stdin.on('end', () => {
-      clearTimeout(timeout);
       resolve(input || null);
     });
-    // If stdin is not a TTY (piped), it will fire 'end'. If it's a TTY,
-    // the timeout will fire.
-    if (process.stdin.isTTY) {
-      clearTimeout(timeout);
-      resolve(null);
-    }
+    // Timeout: se stdin non arriva entro 1.5s, procedi senza sessionId
+    setTimeout(() => resolve(null), 1500);
   });
 }
 
