@@ -19,7 +19,7 @@ Show last request context usage from the Claude Code Proxy. Displays which model
 Run the script directly (Fetch does not work on localhost):
 
 ```
-node ~/.claude-code-proxy/scripts/context-status.js
+node ~/.claude/claude-code-proxy/scripts/context-status.js
 ```
 
 Then show the result as a table with:

@@ -313,13 +313,18 @@ function installPluginOnStartup(): void {
 
     let changed = false;
 
-    // Status line - imposta solo se non già configurata
-    if (!settings.statusLine) {
+    // Status line - imposta se non configurata O se il percorso non esiste più
+    const existingCmd = (settings.statusLine as Record<string, unknown> | undefined)?.command as string | undefined;
+    const statusLineValid = existingCmd && (
+      existingCmd.includes(statusScriptDest) ||
+      fs.existsSync(existingCmd.replace(/^"|"$/g, '').split(' ').pop() || '')
+    );
+    if (!statusLineValid) {
       settings.statusLine = {
         type: 'command',
         command: statusLineCmd,
       };
-      console.log('[Setup] Added proxy-context status line to settings.json');
+      console.log('[Setup] Updated proxy-context status line in settings.json');
       changed = true;
     }
 
