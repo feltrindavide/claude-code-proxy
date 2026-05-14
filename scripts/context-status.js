@@ -37,12 +37,18 @@ async function main() {
     const usage = data.lastUsage || {};
     const config = data.config || {};
 
-    const model = usage.model || 'unknown';
+    const model = usage.model || '';
     const provider = usage.provider || '';
     const tier = usage.tier || '';
     const inflation = usage.inflation || 1;
     const inputTokens = usage.inputTokens || 0;
     const outputTokens = usage.outputTokens || 0;
+
+    // Se non ci sono dati (proxy appena avviato o nessuna richiesta ancora)
+    if (!model) {
+      process.stdout.write(`${DIM}waiting for requests...${RESET}\n`);
+      process.exit(0);
+    }
 
     // Total tokens used (input + output)
     const totalUsed = inputTokens + outputTokens;

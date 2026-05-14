@@ -24,6 +24,9 @@ import { parseToolArguments } from './services/response-parsers.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 import { contextRegistry, type LastContextUsage } from './services/context-registry.js';
 import { countRequestTokens, estimateOutputTokens } from './services/token-counter.js';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -110,10 +113,34 @@ function extractSubagentModel(body: Record<string, unknown>): string | null {
   return modelName;
 }
 
-// Tracciamento ultimo utilizzo contesto
-export let lastContextUsage: LastContextUsage = {
-  inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1,
-};
+// ---------------------------------------------------------------------------
+// Persistenza ultimo utilizzo contesto (sopravvive ai riavvii del proxy)
+// ---------------------------------------------------------------------------
+const USAGE_FILE = join(homedir(), '.claude', 'claude-code-proxy', 'data', 'context-usage.json');
+
+function loadLastUsage(): LastContextUsage {
+  try {
+    if (existsSync(USAGE_FILE)) {
+      return JSON.parse(readFileSync(USAGE_FILE, 'utf-8')) as LastContextUsage;
+    }
+  } catch {}
+  return { inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1 };
+}
+
+function saveLastUsage(usage: LastContextUsage): void {
+  try {
+    const dir = join(homedir(), '.claude', 'claude-code-proxy', 'data');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(USAGE_FILE, JSON.stringify(usage, null, 2), { mode: 0o600 });
+  } catch {}
+}
+
+export let lastContextUsage: LastContextUsage = loadLastUsage();
+
+// Se abbiamo dati persistenti, logghiamo il ripristino
+if (lastContextUsage.model) {
+  console.log(`[Context] Restored last usage: ${lastContextUsage.model} | ${lastContextUsage.inputTokens + lastContextUsage.outputTokens} tokens`);
+}
 
 /**
  * Handle incoming /v1/messages requests
@@ -516,7 +543,7 @@ function inflateUsageTokens(event: string, factor: number): string {
   return event;
 }
 
-/** Aggiorna il tracciamento ultimo utilizzo */
+/** Aggiorna il tracciamento ultimo utilizzo e salva su disco */
 function updateLastUsage(
   inputCount: number, outputCount: number,
   resolution: RouteResolution, inflation: number,
@@ -529,6 +556,7 @@ function updateLastUsage(
     tier: resolution.claudeTier || '',
     inflation,
   };
+  saveLastUsage(lastContextUsage);
 }
 
 export { emitAnthropicError, inflateUsageTokens, getInflationFactor };
