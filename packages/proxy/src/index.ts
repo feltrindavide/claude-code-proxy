@@ -200,6 +200,10 @@ async function loadConfigOnStartup(): Promise<void> {
 
   console.log(`[Proxy] Loaded ${config.providers.length} providers, ${config.routes.length} routes from ~/.claude-code-proxy/config.json`);
 
+  // Sync modelli con context-registry
+  contextRegistry.syncFromConfig(config.providers);
+  console.log(`[Context] Sincronizzati modelli da config.json in proxy-context.json`);
+
   // Load request log from disk (04-01)
   requestLogService.load();
   console.log('[Proxy] Request log loaded from ~/.claude-code-proxy/request-log.json');

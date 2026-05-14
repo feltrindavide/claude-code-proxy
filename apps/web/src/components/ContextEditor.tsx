@@ -30,23 +30,23 @@ export function ContextEditor() {
 
   async function loadData() {
     try {
-      const [ctxResp, provResp] = await Promise.all([
+      const [ctxResp, configResp] = await Promise.all([
         fetch('http://localhost:3456/admin/context'),
-        fetch('http://localhost:3456/admin/providers'),
+        fetch('http://localhost:3456/config'),
       ]);
       const ctx = await ctxResp.json();
-      const providers: ProviderModel[] = await provResp.json();
+      const configData = await configResp.json();
 
-      // Costruisce set di modelli presenti nei provider (Model Library)
+      // Prende i modelli SOLO da config.json (quelli che l'utente ha aggiunto)
       const knownModels = new Set<string>();
-      for (const p of providers) {
+      for (const p of (configData.providers || [])) {
         if (!p.models) continue;
         for (const mId of p.models) {
           knownModels.add(`${p.name}:${mId}`);
         }
       }
 
-      // Filtra solo modelli presenti nei provider
+      // Filtra solo modelli presenti nella config utente
       const filtered = (ctx.config.models || []).filter(
         (m: ModelEntry) => knownModels.has(`${m.provider}:${m.id}`)
       );

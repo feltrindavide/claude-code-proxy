@@ -105,12 +105,11 @@ export class ContextRegistry {
   }
 
   /**
-   * Sincronizza modelli con quelli appena validati:
-   * - Aggiunge nuovi modelli con default_context
-   * - Rimuove modelli di provider cancellati
-   * - Mantiene valori personalizzati dall'utente
+   * Sincronizza i modelli con quelli presenti in config.json (solo quelli
+   * che l'utente ha esplicitamente aggiunto in Model Library).
+   * Mantiene i valori personalizzati dell'utente.
    */
-  syncModels(validated: Map<string, string[]>): void {
+  syncFromConfig(configProviders: Array<{ name: string; models?: string[] }>): void {
     const ctx = this.load();
     const known = new Map<string, ModelContextEntry>();
     for (const m of ctx.models) {
@@ -118,15 +117,16 @@ export class ContextRegistry {
     }
 
     const nuovi: ModelContextEntry[] = [];
-    for (const [provider, ids] of validated) {
-      for (const id of ids) {
-        const key = `${provider}:${id}`;
+    for (const p of configProviders) {
+      if (!p.models) continue;
+      for (const id of p.models) {
+        const key = `${p.name}:${id}`;
         if (known.has(key)) {
           nuovi.push(known.get(key)!);
         } else {
           nuovi.push({
             id,
-            provider,
+            provider: p.name,
             context: ctx.default_context,
             max_output: ctx.default_max_output,
           });

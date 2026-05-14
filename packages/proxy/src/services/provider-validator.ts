@@ -12,7 +12,6 @@ import type { ValidationResult } from '../adapters/interface.js';
 import { getAdapter } from '../adapters/index.js';
 import { getKey } from './keychain.js';
 import { providerService } from './provider.js';
-import { contextRegistry } from './context-registry.js';
 
 /**
  * ProviderValidatorService — validates provider connectivity
@@ -107,18 +106,6 @@ export class ProviderValidatorService {
           `[Validator] ✗ ${provider.name} — ${result.error}`,
         );
       }
-    }
-
-    // Sync modelli validati con proxy-context.json
-    const validatedModels = new Map<string, string[]>();
-    for (const [name, result] of results) {
-      if (result.valid && result.models) {
-        validatedModels.set(name, result.models);
-      }
-    }
-    if (validatedModels.size > 0) {
-      contextRegistry.syncModels(validatedModels);
-      console.log(`[Context] Sincronizzati ${validatedModels.size} provider in proxy-context.json`);
     }
 
     return results;
