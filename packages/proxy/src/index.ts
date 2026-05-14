@@ -9,7 +9,8 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import { handleProxyRequest, lastContextUsage } from './proxy.js';
+import { handleProxyRequest, lastContextUsage, getCurrentSessionUsage } from './proxy.js';
+import { getSessionUsage } from './services/session-tracker.js';
 import { providerService } from './services/provider.js';
 import { contextRegistry } from './services/context-registry.js';
 import { configService } from './services/config.js';
@@ -469,9 +470,13 @@ app.get('/update-check', async (_req, res) => {
 });
 
 // Context tracking endpoint
-app.get('/admin/context', (_req, res) => {
+app.get('/admin/context', (req, res) => {
   const ctx = contextRegistry.load();
-  res.json({ lastUsage: lastContextUsage, config: ctx });
+  const sessionId = req.query.session as string | undefined;
+  const usage = sessionId
+    ? getSessionUsage(sessionId)
+    : getCurrentSessionUsage() || lastContextUsage;
+  res.json({ lastUsage: usage || lastContextUsage, config: ctx });
 });
 
 app.put('/admin/context', express.json(), (req, res) => {

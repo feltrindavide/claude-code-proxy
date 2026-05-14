@@ -27,6 +27,8 @@ import { countRequestTokens, estimateOutputTokens } from './services/token-count
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import type { SessionUsage } from './services/session-tracker.js';
+import { extractSessionId, updateSessionUsage, getSessionUsage } from './services/session-tracker.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -114,33 +116,34 @@ function extractSubagentModel(body: Record<string, unknown>): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Persistenza ultimo utilizzo contesto — solo ultima richiesta, niente peak.
-// Se si apre una nuova sessione, il primo request sovrascrive i dati.
-// Persiste su disco per sopravvivere ai riavvii del proxy.
+// Per-session context tracking
+// Ogni sessione Claude Code ha il proprio tracciamento.
 // ---------------------------------------------------------------------------
-const USAGE_FILE = join(homedir(), '.claude', 'claude-code-proxy', 'data', 'context-usage.json');
 
-function loadLastUsage(): LastContextUsage {
-  try {
-    if (existsSync(USAGE_FILE)) {
-      return JSON.parse(readFileSync(USAGE_FILE, 'utf-8')) as LastContextUsage;
-    }
-  } catch {}
-  return { inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1 };
+/**
+ * Estrae o restituisce la sessione corrente da body.metadata.user_id
+ */
+function getSessionId(body: Record<string, unknown>): string | null {
+  const sid = extractSessionId(body);
+  if (sid) return sid;
+  // Fallback: usa ultime 4 parole del prompt come identificatore approssimativo
+  return null;
 }
 
-function saveLastUsage(usage: LastContextUsage): void {
-  try {
-    const dir = join(homedir(), '.claude', 'claude-code-proxy', 'data');
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(USAGE_FILE, JSON.stringify(usage, null, 2), { mode: 0o600 });
-  } catch {}
+/**
+ * Restituisce il contesto per la sessione corrente (o ultima attiva)
+ */
+export function getCurrentSessionUsage(): SessionUsage | null {
+  return getSessionUsage();
 }
 
-export let lastContextUsage: LastContextUsage = loadLastUsage();
+export let lastContextUsage: LastContextUsage = { inputTokens: 0, outputTokens: 0, model: '', provider: '', inflation: 1 };
 
-if (lastContextUsage.model) {
-  console.log(`[Context] Restored: ${lastContextUsage.model} | ${lastContextUsage.inputTokens + lastContextUsage.outputTokens} tokens`);
+// Carica l'ultima sessione attiva dal disco
+const saved = getSessionUsage();
+if (saved) {
+  lastContextUsage = saved;
+  console.log(`[Context] Restored session: ${saved.model} | ${saved.inputTokens + saved.outputTokens} tokens`);
 }
 
 /**
@@ -223,10 +226,16 @@ export async function handleProxyRequest(
     resolution.provider.baseUrl,
   );
 
-  // 5. Calcola token di input REALI per passarli a Claude Code
+  // 5. Estrai sessionId per tracking per-sessione
+  const currentSessionId = extractSessionId(body);
+  if (currentSessionId) {
+    (req as any)._sessionId = currentSessionId;
+  }
+
+  // 5b. Calcola token di input REALI per passarli a Claude Code
   const realInputTokens = countRequestTokens(body.messages, body.system, body.tools);
 
-  // 5b. Transform request body (Anthropic → provider format)
+  // 5c. Transform request body (Anthropic → provider format)
   const providerBody = adapter.transformRequest(body, resolution);
 
   // Debug: check reasoning_content for DeepSeek
@@ -376,7 +385,7 @@ export async function handleProxyRequest(
       res.end();
       // Traccia ultimo utilizzo con conteggio token accurato
       const inputTok = countRequestTokens(body.messages, body.system, body.tools);
-      updateLastUsage(inputTok.total, 0, resolution, inflationFactor);
+      updateLastUsage(inputTok.total, 0, resolution, inflationFactor, currentSessionId);
     } else {
       // Non-streaming: accumulate events into a complete JSON response
       res.setHeader('Content-Type', 'application/json');
@@ -445,7 +454,7 @@ export async function handleProxyRequest(
         stop_sequence: null,
         usage: { input_tokens: inflatedInput, output_tokens: inflatedOutput },
       });
-      updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor);
+      updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor, currentSessionId);
     }
   } catch (error) {
     // Instead of emitting an error event (which Claude Code can't parse),
@@ -544,12 +553,13 @@ function inflateUsageTokens(event: string, factor: number): string {
   return event;
 }
 
-/** Aggiorna il tracciamento ultimo utilizzo e salva su disco */
+/** Aggiorna il tracciamento per la sessione corrente e salva su disco */
 function updateLastUsage(
   inputCount: number, outputCount: number,
   resolution: RouteResolution, inflation: number,
+  sessionId?: string | null,
 ): void {
-  lastContextUsage = {
+  const usage: SessionUsage = {
     inputTokens: inputCount,
     outputTokens: outputCount,
     model: resolution.targetModel,
@@ -557,7 +567,8 @@ function updateLastUsage(
     tier: resolution.claudeTier || '',
     inflation,
   };
-  saveLastUsage(lastContextUsage);
+  lastContextUsage = usage as LastContextUsage;
+  updateSessionUsage(sessionId || null, usage);
 }
 
 export { emitAnthropicError, inflateUsageTokens, getInflationFactor };
