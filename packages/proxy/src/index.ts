@@ -474,9 +474,9 @@ app.get('/admin/context', (req, res) => {
   const ctx = contextRegistry.load();
   const sessionId = req.query.session as string | undefined;
   const usage = sessionId
-    ? getSessionUsage(sessionId)
-    : getCurrentSessionUsage() || lastContextUsage;
-  res.json({ lastUsage: usage || lastContextUsage, config: ctx });
+    ? getSessionUsage(sessionId)           // Richiesta esplicita: SOLO quella sessione
+    : getCurrentSessionUsage() || lastContextUsage; // Senza sessione: ultima attiva
+  res.json({ lastUsage: usage || null, config: ctx });
 });
 
 app.put('/admin/context', express.json(), (req, res) => {

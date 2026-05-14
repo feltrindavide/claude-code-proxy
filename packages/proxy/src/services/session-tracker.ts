@@ -106,12 +106,16 @@ export function updateSessionUsage(
 }
 
 /**
- * Restituisce l'utilizzo per una sessione specifica, o l'ultima attiva.
+ * Restituisce l'utilizzo per una sessione specifica.
+ * Se sessionId è esplicito ma non ha dati, ritorna null (non l'ultima attiva).
+ * Se sessionId non è specificato, ritorna l'ultima attiva.
  */
 export function getSessionUsage(sessionId?: string | null): SessionUsage | null {
-  if (sessionId && store.sessions[sessionId]) {
-    return store.sessions[sessionId];
+  // Se è richiesta una sessione specifica, torna SOLO quella
+  if (sessionId) {
+    return store.sessions[sessionId] || null;
   }
+  // Nessuna sessione specifica: torna l'ultima attiva
   if (store.lastActive && store.sessions[store.lastActive]) {
     return store.sessions[store.lastActive];
   }
