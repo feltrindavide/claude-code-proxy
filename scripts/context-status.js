@@ -75,7 +75,6 @@ async function main() {
     // Model: contesto proxy > stdin
     const model = usage.model || stdinModel || '';
     const tier = usage.tier || '';
-    const inflation = usage.inflation || 1;
     // Token: proxy > stdin context_window > 0
     const inputTokens = usage.inputTokens || stdinCtxInput || 0;
     const outputTokens = usage.outputTokens || stdinCtxOutput || 0;
@@ -132,7 +131,6 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
-    const infl = inflation > 1 ? ` ×${inflation.toFixed(1)}` : '';
     // Mostra 1 decimale per % < 10, intero per % >= 10
     const pctDisplay = pctRaw < 10 ? pctRaw.toFixed(1) : String(pct);
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
@@ -142,7 +140,7 @@ async function main() {
 
     // TUTTO in bold, niente dim
     process.stdout.write(
-      `${BOLD}${model}${folderTag} │ ${bar} ${used}/${maxCtx} (${pctStr})${infl}${RESET}\n`,
+      `${BOLD}${model}${folderTag} │ ${bar} ${used}/${maxCtx} (${pctStr})${RESET}\n`,
     );
   } catch (err) {
     process.stdout.write(`${BOLD}⚠ proxy offline${RESET}\n`);
