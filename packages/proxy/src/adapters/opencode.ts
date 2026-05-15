@@ -250,20 +250,21 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content — cap to ~2048 tokens (8192 chars)
-        // to prevent DeepSeek from consuming all output budget on reasoning
+        // Handle reasoning/thinking content — cap proporzionale a max_tokens
+        // per evitare che DeepSeek consumi tutto il budget in reasoning
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
           if (options.thinkingEnabled) {
-            // Cap reasoning at 8192 chars (~2048 token) to leave room for actual response
-            const MAX_REASONING_CHARS = 8192;
-            if (sse.getTotalReasoningChars() < MAX_REASONING_CHARS) {
-              const remaining = MAX_REASONING_CHARS - sse.getTotalReasoningChars();
+            // Cap dinamico: 25% di max_tokens (in chars), min 2k, max 16k
+            const maxTok = options.maxTokens ?? 8192;
+            const maxReasoningChars = Math.min(Math.max(Math.round(maxTok * 4 * 0.25), 2048), 16384);
+            if (sse.getTotalReasoningChars() < maxReasoningChars) {
+              const remaining = maxReasoningChars - sse.getTotalReasoningChars();
               const chunk = reasoningContent.length <= remaining ? reasoningContent : reasoningContent.slice(0, remaining);
               for (const evt of sse.ensureThinkingBlock()) { yield evt; }
               yield sse.emitThinkingDelta(chunk);
             }
-            // Beyond cap: silently skip reasoning chunks
+            // Beyond cap: silently skip
           } else {
             for (const evt of sse.ensureTextBlock()) { yield evt; }
             yield sse.emitTextDelta(reasoningContent);

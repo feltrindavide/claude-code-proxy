@@ -45,6 +45,8 @@ export interface TransformOptions {
   requestId?: string;
   /** La richiesta originale aveva thinking abilitato? */
   thinkingEnabled?: boolean;
+  /** max_tokens della richiesta (per calcolo proporzionale) */
+  maxTokens?: number;
 }
 
 /**
