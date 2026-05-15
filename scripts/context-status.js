@@ -33,11 +33,14 @@ function readStdin() {
 
 async function main() {
   try {
-    // 1. Leggi stdin (session_id, model, cwd da Claude Code)
+    // 1. Leggi stdin (session_id, model, cwd, context_window da Claude Code)
     const stdinData = await readStdin();
     let sessionId = '';
     let folderFromStdin = '';
     let stdinModel = '';
+    let stdinCtxInput = 0;
+    let stdinCtxOutput = 0;
+    let stdinCtxWindow = 0;
 
     if (stdinData) {
       try {
@@ -45,6 +48,12 @@ async function main() {
         sessionId = parsed.session_id || '';
         folderFromStdin = parsed.workspace?.current_dir || '';
         stdinModel = parsed.model?.display_name || parsed.model?.id || '';
+        // Context window da stdin (stima Claude Code, utile prima della prima richiesta proxy)
+        if (parsed.context_window) {
+          stdinCtxInput = parsed.context_window.total_input_tokens || 0;
+          stdinCtxOutput = parsed.context_window.total_output_tokens || 0;
+          stdinCtxWindow = parsed.context_window.context_window_size || 0;
+        }
       } catch {}
     }
 
@@ -67,8 +76,9 @@ async function main() {
     const model = usage.model || stdinModel || '';
     const tier = usage.tier || '';
     const inflation = usage.inflation || 1;
-    const inputTokens = usage.inputTokens || 0;
-    const outputTokens = usage.outputTokens || 0;
+    // Token: proxy > stdin context_window > 0
+    const inputTokens = usage.inputTokens || stdinCtxInput || 0;
+    const outputTokens = usage.outputTokens || stdinCtxOutput || 0;
     const totalUsed = inputTokens + outputTokens;
 
     // Se non c'è niente (no contesto, no stdin model), esci
@@ -77,7 +87,7 @@ async function main() {
       process.exit(0);
     }
 
-    // 3. Contesto massimo: priorità al modello reale, fallback al tier
+    // 3. Contesto massimo: modello proxy > stdin context_window > tier > default
     let maxContext = 200_000;
     let foundModel = false;
     if (config.models && Array.isArray(config.models)) {
@@ -88,6 +98,10 @@ async function main() {
         maxContext = entry.context;
         foundModel = true;
       }
+    }
+    if (!foundModel && stdinCtxWindow) {
+      maxContext = stdinCtxWindow;
+      foundModel = true;
     }
     if (!foundModel && tier && config.claude && config.claude[tier]) {
       maxContext = config.claude[tier];
