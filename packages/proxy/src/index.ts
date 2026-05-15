@@ -597,10 +597,8 @@ function startHttpsServer(app: express.Application, httpsPort: number): void {
 
 /**
  * POST /admin/setup-desktop — configura il sistema per Claude Desktop.
- * Richiede privilegi admin (mostra dialogo macOS).
- * 1. /etc/hosts: api.anthropic.com → 127.0.0.1
- * 2. Fidati del certificato self-signed nel keychain di sistema
- * 3. pf: redirige porta 443 → porta HTTPS del proxy
+ * Scrive uno script temporaneo ed esegue via osascript per evitare problemi
+ * di escaping con le virgolette.
  */
 function setupSystemProxyRoutes(): void {
   app.post('/admin/setup-desktop', express.json(), async (_req, res) => {
@@ -610,34 +608,56 @@ function setupSystemProxyRoutes(): void {
         return res.status(500).json({ error: 'Failed to generate certificate' });
       }
 
+      const home = process.env.HOME || '';
+      const setupScript = path.join(home, '.claude', 'claude-code-proxy', 'scripts', 'setup-desktop.sh');
       const httpsPort = 3457;
-      const script = `
-        do shell script "
-          # 1. Hosts: api.anthropic.com → 127.0.0.1
-          if ! grep -q 'api.anthropic.com' /etc/hosts; then
-            echo '127.0.0.1 api.anthropic.com' >> /etc/hosts
-          fi
 
-          # 2. Trust the self-signed cert in system keychain
-          security add-trusted-cert -d -r trustAsRoot -p ssl -k /Library/Keychains/System.keychain "${certs.cert}" 2>/dev/null || true
+      // Crea script di setup
+      const scriptContent = `#!/bin/bash
+# Claude Code Proxy — Desktop setup (run with sudo)
 
-          # 3. pf: 443 → ${httpsPort}
-          echo 'rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${httpsPort}' | /sbin/pfctl -ef - 2>/dev/null
+# 1. /etc/hosts entry
+if ! grep -q "api.anthropic.com" /etc/hosts 2>/dev/null; then
+  echo "127.0.0.1 api.anthropic.com" >> /etc/hosts
+  echo "[OK] Added api.anthropic.com to /etc/hosts"
+else
+  echo "[OK] api.anthropic.com already in /etc/hosts"
+fi
 
-          # 4. Keep pf running (disable automatic reset)
-          echo 'net.inet.ip.fw.enable=1' | sysctl -w 2>/dev/null || true
-        " with administrator privileges
-      `;
+# 2. Trust self-signed cert
+if [ -f "${certs.cert}" ]; then
+  security add-trusted-cert -d -r trustAsRoot -p ssl -k /Library/Keychains/System.keychain "${certs.cert}" 2>/dev/null
+  echo "[OK] Certificate trusted in system keychain"
+fi
 
-      execSync(`osascript -e '${script}'`, { timeout: 60000, encoding: 'utf-8' });
+# 3. pf: redirect 443 → ${httpsPort}
+echo "rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${httpsPort}" | /sbin/pfctl -ef - 2>/dev/null
+echo "[OK] pf: port 443 → ${httpsPort}"
+
+# 4. Enable ip forwarding
+sysctl -w net.inet.ip.fw.enable=1 2>/dev/null || true
+
+echo ""
+echo "Done. Restart Claude Desktop for changes to take effect."
+`;
+
+      fs.writeFileSync(setupScript, scriptContent, { mode: 0o755 });
+
+      // Esegui via osascript con privilegi amministratore
+      execSync(
+        `osascript -e 'do shell script "${setupScript}" with administrator privileges'`,
+        { timeout: 120000, encoding: 'utf-8' },
+      );
 
       res.json({
         success: true,
         message: `Claude Desktop configured. Proxy HTTPS on port ${httpsPort}. Restart Claude Desktop.`,
       });
-    } catch (e) {
+    } catch (e: any) {
+      const msg = e?.stderr?.toString() || e?.message || 'Unknown error';
+      console.error('[Setup] Desktop setup failed:', msg);
       res.status(500).json({
-        error: 'Setup failed. Make sure you have admin privileges and try again.',
+        error: `Setup failed: ${msg}`,
       });
     }
   });
