@@ -293,19 +293,8 @@ export class CustomAdapter implements ProviderAdapter {
         // Handle reasoning/thinking content — cap to ~2048 tokens
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          if (options.thinkingEnabled) {
-            const maxTok = options.maxTokens ?? 8192;
-            const maxRsn = Math.min(Math.max(Math.round(maxTok * 4 * 0.25), 2048), 16384);
-            if (sse.getTotalReasoningChars() < maxRsn) {
-              const remaining = maxRsn - sse.getTotalReasoningChars();
-              const chunk = reasoningContent.length <= remaining ? reasoningContent : reasoningContent.slice(0, remaining);
-              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-              yield sse.emitThinkingDelta(chunk);
-            }
-          } else {
-            for (const evt of sse.ensureTextBlock()) { yield evt; }
-            yield sse.emitTextDelta(reasoningContent);
-          }
+          for (const evt of sse.ensureTextBlock()) { yield evt; }
+          yield sse.emitTextDelta(reasoningContent);
         }
 
         // Handle text content deltas
