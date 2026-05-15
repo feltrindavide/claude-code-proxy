@@ -65,19 +65,32 @@ function save(): void {
 /**
  * Estrae il sessionId dal body della richiesta.
  * Claude Code invia metadata.user_id nel formato "utente_sessionId".
+ * Claude Desktop può inviare metadata.user_id come oggetto JSON con session_id.
  */
 export function extractSessionId(body: Record<string, unknown>): string | null {
   try {
     const metadata = body.metadata as Record<string, unknown> | undefined;
     if (!metadata) return null;
-    const userId = metadata.user_id as string | undefined;
-    if (!userId) return null;
-    // Formato: "user_sessionId"
-    const parts = userId.split('_session_');
-    if (parts.length > 1) {
-      return parts[1];
+    const userId = metadata.user_id;
+
+    // Caso 1: stringa semplice "utente_sessionId"
+    if (typeof userId === 'string') {
+      const parts = userId.split('_session_');
+      if (parts.length > 1) return parts[1];
+      return userId;
     }
-    return userId; // Fallback: usa tutto come sessionId
+
+    // Caso 2: oggetto JSON con campo session_id (Claude Desktop)
+    if (typeof userId === 'object' && userId !== null) {
+      const obj = userId as Record<string, unknown>;
+      const sid = obj.session_id as string | undefined;
+      if (sid) return sid;
+      // Fallback: device_id breve
+      const did = obj.device_id as string | undefined;
+      if (did) return did.substring(0, 12);
+    }
+
+    return null;
   } catch {
     return null;
   }
