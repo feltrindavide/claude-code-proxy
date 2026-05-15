@@ -290,12 +290,17 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content
+        // Handle reasoning/thinking content — cap to ~2048 tokens
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
           if (options.thinkingEnabled) {
-            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-            yield sse.emitThinkingDelta(reasoningContent);
+            const MAX_REASONING_CHARS = 8192;
+            if (sse.getTotalReasoningChars() < MAX_REASONING_CHARS) {
+              const remaining = MAX_REASONING_CHARS - sse.getTotalReasoningChars();
+              const chunk = reasoningContent.length <= remaining ? reasoningContent : reasoningContent.slice(0, remaining);
+              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+              yield sse.emitThinkingDelta(chunk);
+            }
           } else {
             for (const evt of sse.ensureTextBlock()) { yield evt; }
             yield sse.emitTextDelta(reasoningContent);

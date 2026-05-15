@@ -250,15 +250,21 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content
+        // Handle reasoning/thinking content — cap to ~2048 tokens (8192 chars)
+        // to prevent DeepSeek from consuming all output budget on reasoning
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
           if (options.thinkingEnabled) {
-            // Emit as thinking blocks — Claude Code expects them when thinking is enabled
-            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-            yield sse.emitThinkingDelta(reasoningContent);
+            // Cap reasoning at 8192 chars (~2048 token) to leave room for actual response
+            const MAX_REASONING_CHARS = 8192;
+            if (sse.getTotalReasoningChars() < MAX_REASONING_CHARS) {
+              const remaining = MAX_REASONING_CHARS - sse.getTotalReasoningChars();
+              const chunk = reasoningContent.length <= remaining ? reasoningContent : reasoningContent.slice(0, remaining);
+              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+              yield sse.emitThinkingDelta(chunk);
+            }
+            // Beyond cap: silently skip reasoning chunks
           } else {
-            // Emit as text — for non-thinking requests, Claude Code needs to see content
             for (const evt of sse.ensureTextBlock()) { yield evt; }
             yield sse.emitTextDelta(reasoningContent);
           }
