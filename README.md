@@ -34,6 +34,21 @@ The proxy handles routing automatically. Check for updates in **Settings → Abo
 
 > 💡 In Claude Code, type `/proxy-context` to see which model was used last and how much of the context window was consumed. This skill is auto-installed when the app starts.
 
+### 4. (Optional) Use with Claude Desktop
+The proxy also works with the Claude Desktop app (chat + cowork). After installing, run this once:
+
+```bash
+curl -X POST http://localhost:3456/admin/setup-desktop
+```
+
+This will:
+1. Add `api.anthropic.com → 127.0.0.1` to `/etc/hosts`
+2. Generate and trust a self-signed TLS certificate for `api.anthropic.com`
+3. Redirect port 443 → 3457 via `pf` (macOS packet filter)
+4. Start an HTTPS server on port 3457
+
+Then fully quit and reopen Claude Desktop. All requests (chat, cowork, code) will be routed through the proxy.
+
 ## Features
 
 | | |
