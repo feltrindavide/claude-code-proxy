@@ -9,6 +9,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { handleProxyRequest, lastContextUsage, getCurrentSessionUsage } from './proxy.js';
 import { getSessionUsage } from './services/session-tracker.js';
 import { providerService } from './services/provider.js';
@@ -502,11 +503,36 @@ app.put('/admin/context', express.json(), (req, res) => {
 });
 
 /**
+ * Imposta ANTHROPIC_BASE_URL per le app GUI via launchctl.
+ * Permette a Claude Desktop di usare il proxy.
+ */
+function setupLaunchctlEnv(): void {
+  try {
+    const current = execSync(
+      'launchctl getenv ANTHROPIC_BASE_URL 2>/dev/null || true',
+      { encoding: 'utf-8', timeout: 2000 },
+    ).trim();
+
+    if (current !== `http://localhost:3456`) {
+      execSync(
+        'launchctl setenv ANTHROPIC_BASE_URL http://localhost:3456',
+        { timeout: 2000 },
+      );
+      console.log('[Setup] Set ANTHROPIC_BASE_URL via launchctl for GUI apps (Claude Desktop)');
+    }
+  } catch (err) {
+    console.warn('[Setup] Could not set launchctl env:', err instanceof Error ? err.message : 'unknown');
+  }
+}
+
+/**
  * Start the Express server
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
   // Migrazione prima di tutto: ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/
   migrateFromOldPath();
+  // Imposta ANTHROPIC_BASE_URL per app GUI (Claude Desktop)
+  setupLaunchctlEnv();
   // Ensure proxy-context.json esiste
   contextRegistry.ensureDefaults();
   // Load config and validate providers on startup (01-03: per D-13, MAP-03; 02-03: per D-22)
