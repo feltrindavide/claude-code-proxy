@@ -4,7 +4,7 @@
  * Legge session_id da stdin (passato da Claude Code/OpenCode) per mostrare
  * i dati corretti per la sessione corrente.
  *
- * Formato: "z-ai/glm-4.5-air:free │ cartella │ ████░░░░ 45k/131k (35%)"
+ * Formato: z-ai/glm-4.5-air:free │ cartella │ ████░░░░ 45k/131k (35%)
  *
  * Installazione in ~/.claude/settings.json:
  *   "statusLine": {
@@ -13,44 +13,38 @@
  *   }
  */
 
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
+const RESET = '\x1b[0m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 
 const PROXY_URL = 'http://localhost:3456';
 
-/**
- * Legge stdin con timeout. Claude Code passa JSON con session_id, model, cwd.
- * Se stdin non arriva entro 2s, procede senza (fallback all'ultima sessione).
- */
 function readStdin() {
   return new Promise((resolve) => {
     let input = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { input += chunk; });
-    process.stdin.on('end', () => {
-      resolve(input || null);
-    });
-    // Timeout: se stdin non arriva entro 1.5s, procedi senza sessionId
+    process.stdin.on('end', () => { resolve(input || null); });
     setTimeout(() => resolve(null), 1500);
   });
 }
 
 async function main() {
   try {
-    // 1. Leggi session_id da stdin
+    // 1. Leggi stdin (session_id, model, cwd da Claude Code)
     const stdinData = await readStdin();
     let sessionId = '';
     let folderFromStdin = '';
+    let stdinModel = '';
 
     if (stdinData) {
       try {
         const parsed = JSON.parse(stdinData);
         sessionId = parsed.session_id || '';
         folderFromStdin = parsed.workspace?.current_dir || '';
+        stdinModel = parsed.model?.display_name || parsed.model?.id || '';
       } catch {}
     }
 
@@ -61,7 +55,7 @@ async function main() {
 
     const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
     if (!resp.ok) {
-      process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);
+      process.stdout.write(`${BOLD}⚠ proxy offline${RESET}\n`);
       process.exit(0);
     }
 
@@ -69,15 +63,17 @@ async function main() {
     const usage = data.lastUsage || {};
     const config = data.config || {};
 
-    const model = usage.model || '';
+    // Model: contesto proxy > stdin
+    const model = usage.model || stdinModel || '';
     const tier = usage.tier || '';
     const inflation = usage.inflation || 1;
     const inputTokens = usage.inputTokens || 0;
     const outputTokens = usage.outputTokens || 0;
     const totalUsed = inputTokens + outputTokens;
 
+    // Se non c'è niente (no contesto, no stdin model), esci
     if (!model) {
-      process.stdout.write(`${DIM}○ waiting for requests...${RESET}\n`);
+      process.stdout.write(`${BOLD}○${RESET}\n`);
       process.exit(0);
     }
 
@@ -97,7 +93,7 @@ async function main() {
       maxContext = config.claude[tier];
     }
 
-    // 4. Nome cartella: da stdin > process.cwd > niente
+    // 4. Nome cartella: da stdin > process.cwd
     const folder = (folderFromStdin || process.cwd()).split('/').pop() || '';
 
     // 5. Progress bar (8 segmenti) con colore
@@ -109,7 +105,7 @@ async function main() {
     if (pct > 80) barColor = RED;
     else if (pct > 50) barColor = YELLOW;
 
-    const bar = `${barColor}${'█'.repeat(filled)}${RESET}${DIM}${'░'.repeat(empty)}${RESET}`;
+    const bar = `${barColor}${'█'.repeat(filled)}${RESET}${'░'.repeat(empty)}`;
 
     const fmt = (n) => {
       if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -119,16 +115,18 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
-    const infl = inflation === 1 ? '' : ` ${DIM}×${inflation.toFixed(1)}${RESET}`;
+    const infl = inflation === 1 ? '' : ` ×${inflation.toFixed(1)}`;
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
     const pctStr = pctColor ? `${pctColor}${pct}%${RESET}` : `${pct}%`;
 
-    const folderTag = folder ? `${DIM}${folder}${RESET}` : '';
+    const folderTag = folder ? ` │ ${folder}` : '';
+
+    // TUTTO in bold, niente dim
     process.stdout.write(
-      `${BOLD}${model}${RESET}${folderTag ? ` ${DIM}│${RESET} ${folderTag}` : ''} ${DIM}│${RESET} ${bar} ${DIM}${used}/${maxCtx}${RESET} (${pctStr})${infl}\n`,
+      `${BOLD}${model}${folderTag} │ ${bar} ${used}/${maxCtx} (${pctStr})${infl}${RESET}\n`,
     );
   } catch (err) {
-    process.stdout.write(`${DIM}⚠ proxy offline${RESET}\n`);
+    process.stdout.write(`${BOLD}⚠ proxy offline${RESET}\n`);
   }
 }
 
