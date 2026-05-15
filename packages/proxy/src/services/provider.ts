@@ -15,45 +15,27 @@ export class ProviderService {
   private providers: Map<string, LLMProvider> = new Map();
   private routes: ModelRoute[] = [];
 
-  /**
-   * Register a provider in the registry
-   */
   registerProvider(provider: LLMProvider): void {
     this.providers.set(provider.name, provider);
   }
 
-  /**
-   * Delete a provider from the registry
-   */
   deleteProvider(name: string): void {
     this.providers.delete(name);
   }
 
-  /**
-   * Get all providers, sorted by priority (lower = higher priority)
-   */
   getProviders(): LLMProvider[] {
     return Array.from(this.providers.values())
       .sort((a, b) => a.priority - b.priority);
   }
 
-  /**
-   * Get a specific provider by name
-   */
   getProvider(name: string): LLMProvider | undefined {
     return this.providers.get(name);
   }
 
-  /**
-   * Set route mappings (replaces existing)
-   */
   setRoutes(routes: ModelRoute[]): void {
     this.routes = routes;
   }
 
-  /**
-   * Get current routes
-   */
   getRoutes(): ModelRoute[] {
     return [...this.routes];
   }
@@ -130,11 +112,11 @@ export class ProviderService {
    */
   private extractTier(modelName: string): ClaudeTier | null {
     const lower = modelName.toLowerCase();
-    
+
     if (lower.startsWith('claude-opus')) return 'opus';
     if (lower.startsWith('claude-sonnet')) return 'sonnet';
     if (lower.startsWith('claude-haiku')) return 'haiku';
-    
+
     return null;
   }
 
@@ -145,6 +127,19 @@ export class ProviderService {
     this.providers.clear();
     providers.forEach(p => this.providers.set(p.name, p));
     this.routes = routes;
+  }
+
+  /**
+   * Internal: resolve a route from a scenario or route config
+   */
+  private resolveRoute(config: { providerName: string; targetModel: string }, originalModel: string): RouteResolution | null {
+    const provider = this.providers.get(config.providerName);
+    if (!provider || !provider.enabled) return null;
+    return {
+      provider,
+      targetModel: config.targetModel,
+      originalModel: originalModel,
+    };
   }
 }
 

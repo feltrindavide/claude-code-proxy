@@ -200,12 +200,23 @@ export class ContentBlockManager {
 export class SSEBuilder {
   private blocks = new ContentBlockManager();
   private totalOutputChars = 0;
+  private totalReasoningChars = 0;
 
   constructor(
     private messageId: string,
     private model: string,
     private inputTokens: number,
   ) {}
+
+  /** Returns total reasoning characters emitted so far */
+  getTotalReasoningChars(): number {
+    return this.totalReasoningChars;
+  }
+
+  /** Returns true if any text content (non-reasoning) has been emitted */
+  hasTextContent(): boolean {
+    return this.totalOutputChars > this.totalReasoningChars;
+  }
 
   /** Estimate output tokens from accumulated content (rough: ~4 chars/token) */
   private estimateOutputTokens(): number {
@@ -288,6 +299,7 @@ export class SSEBuilder {
   /** Emit a content_block_delta with thinking_delta */
   emitThinkingDelta(thinking: string): string {
     this.totalOutputChars += thinking.length;
+    this.totalReasoningChars += thinking.length;
     return this.blocks.emitThinkingDelta(thinking);
   }
 

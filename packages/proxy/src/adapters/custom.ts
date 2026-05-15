@@ -261,6 +261,10 @@ export class CustomAdapter implements ProviderAdapter {
     const sse = new SSEBuilder(options.messageId, options.model, options.inputTokens);
     yield sse.message_start();
 
+    // Track whether the upstream provider sent structured reasoning_content.
+    // When true, content is pure answer text (no embedded <think> tags).
+    let hasStructuredReasoning = false;
+
     try {
       for await (const event of parseSSEStream(upstreamResponse.body)) {
         // Skip [DONE] terminal event
@@ -290,11 +294,20 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content — cap to ~2048 tokens
+        // Handle reasoning/thinking content — emetti come thinking_delta
+        // cosi' Claude Code lo mostra nell'UI thinking nativa (non mischiato col testo)
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) { yield evt; }
-          yield sse.emitTextDelta(reasoningContent);
+          hasStructuredReasoning = true;
+          if (options.thinkingEnabled) {
+            // Structured reasoning → thinking_delta per l'UI thinking di Claude Code
+            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+            yield sse.emitThinkingDelta(reasoningContent);
+          } else {
+            // Non-thinking mode → emit reasoning as visible text
+            for (const evt of sse.ensureTextBlock()) { yield evt; }
+            yield sse.emitTextDelta(reasoningContent);
+          }
         }
 
         // Handle text content deltas

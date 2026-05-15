@@ -27,6 +27,7 @@ const DEFAULT_PORT = 3456;
 const DEFAULT_HOST = 'localhost';
 
 import { writeModelEnvFile } from './services/modelEnv.js';
+import { LocalDiscoveryService } from './services/local-discovery.js';
 
 const app = express();
 
@@ -440,6 +441,19 @@ async function loadConfigOnStartup(): Promise<void> {
   } catch (error) {
     console.error('[Proxy] Startup validation error:', error);
   }
+
+  // Start local provider discovery
+  const discovery = new LocalDiscoveryService(
+    (provider) => {
+      // Don't overwrite manually configured providers
+      if (providerService.getProvider(provider.name) && !provider.autoDiscovered) return;
+      providerService.registerProvider({ ...provider, keyId: provider.name });
+      contextRegistry.syncFromConfig(configService.load().providers);
+    },
+    config.discoveryConfig,
+  );
+  discovery.start();
+  (app as any)._discoveryService = discovery;
 }
 
 // Serve frontend static files if bundled together (production build)
@@ -471,6 +485,24 @@ app.get('/update-check', async (_req, res) => {
   } catch {
     res.status(502).json({ error: 'Failed to check for updates' });
   }
+});
+
+// Discovery admin endpoints
+app.get('/admin/discovery', (_req, res) => {
+  const discovery = (app as any)._discoveryService;
+  if (!discovery) return res.json({ enabled: false, providers: [] });
+  res.json({
+    enabled: true,
+    config: discovery.getConfig(),
+    providers: discovery.getDiscoveredProviders(),
+  });
+});
+
+app.post('/admin/discovery/scan', async (_req, res) => {
+  const discovery = (app as any)._discoveryService;
+  if (!discovery) return res.status(503).json({ error: 'Discovery not initialized' });
+  await discovery.scan();
+  res.json({ success: true, providers: discovery.getDiscoveredProviders() });
 });
 
 // Context tracking endpoint

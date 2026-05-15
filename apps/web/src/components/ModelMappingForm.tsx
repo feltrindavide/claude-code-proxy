@@ -54,10 +54,8 @@ export function ModelMappingForm() {
         fetch('http://localhost:3456/admin/auto-compact').then(r => r.json()).catch(() => ({ threshold: 0.7 })),
       ]);
 
-      // New API returns { routes, subagentModel }
       const routeList = Array.isArray(routesData) ? routesData : routesData.routes;
 
-      // Merge existing routes with defaults
       const merged = defaultRoutes.map((defaultRoute) => {
         const existing = routeList.find((r) => r.claudeTier === defaultRoute.claudeTier);
         return existing || defaultRoute;

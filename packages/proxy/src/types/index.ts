@@ -14,6 +14,7 @@ export interface LLMProvider {
   models: string[];
   enabled: boolean;
   priority: number; // lower = higher priority (D-12)
+  autoDiscovered?: boolean; // Set by local provider discovery
 }
 
 export interface AdapterConfig {

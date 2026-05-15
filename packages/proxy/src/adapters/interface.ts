@@ -43,6 +43,8 @@ export interface TransformOptions {
   model: string;
   inputTokens: number;
   requestId?: string;
+  /** Whether the original request had thinking.type === 'enabled' (high-effort mode) */
+  thinkingEnabled?: boolean;
 }
 
 /**

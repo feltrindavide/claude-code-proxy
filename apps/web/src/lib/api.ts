@@ -279,6 +279,107 @@ export async function fetchRecentLogs(): Promise<RequestLogEntry[]> {
   return response.json();
 }
 
+// ---------------------------------------------------------------------------
+// Discovery API
+// ---------------------------------------------------------------------------
+
+export interface DiscoveredProvider {
+  name: string;
+  reachable: boolean;
+}
+
+export interface DiscoveryStatus {
+  enabled: boolean;
+  config: {
+    enabled: boolean;
+    intervalMs: number;
+    ollama: boolean;
+    lmStudio: boolean;
+    llamaCpp: boolean;
+  };
+  providers: DiscoveredProvider[];
+}
+
+export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/discovery`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch discovery status');
+  return response.json();
+}
+
+export async function scanDiscovery(): Promise<{ success: boolean; providers: DiscoveredProvider[] }> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/discovery/scan`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('Failed to trigger discovery scan');
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Thinking config API
+// ---------------------------------------------------------------------------
+
+export interface TierThinkingConfig {
+  mode: 'passthrough' | 'strip' | 'transform' | 'auto';
+}
+
+export interface ThinkingConfig {
+  opus: TierThinkingConfig;
+  sonnet: TierThinkingConfig;
+  haiku: TierThinkingConfig;
+  overrides?: Record<string, string>;
+}
+
+export async function fetchThinkingConfig(): Promise<ThinkingConfig> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch thinking config');
+  return response.json();
+}
+
+export async function saveThinkingConfig(config: ThinkingConfig): Promise<{ success: boolean }> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error('Failed to save thinking config');
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Cache config API
+// ---------------------------------------------------------------------------
+
+export interface CacheConfig {
+  enabled: boolean;
+  ttlMs: number;
+  maxEntries: number;
+}
+
+export async function fetchCacheConfig(): Promise<CacheConfig> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/cache-config`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch cache config');
+  return response.json();
+}
+
+export async function saveCacheConfig(config: CacheConfig): Promise<{ success: boolean }> {
+  const response = await fetch(`${PROXY_API_BASE}/admin/cache-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error('Failed to save cache config');
+  return response.json();
+}
+
 export async function scanProviderModels(providerName: string): Promise<{ models: string[] }> {
   const response = await fetch(`${PROXY_API_BASE}/admin/providers/${providerName}/models`, {
     signal: AbortSignal.timeout(15000),

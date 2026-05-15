@@ -29,6 +29,9 @@ import { join } from 'path';
 import { homedir } from 'os';
 import type { SessionUsage } from './services/session-tracker.js';
 import { extractSessionId, updateSessionUsage, getSessionUsage } from './services/session-tracker.js';
+import { tryFastPath } from './services/fast-path.js';
+import { responseCache } from './services/response-cache.js';
+import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlockTracker } from './services/thinking-filter.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -158,6 +161,23 @@ export async function handleProxyRequest(
   const body = req.body || {};
   let modelName = body.model || 'claude-opus-4-20250514';
 
+  // 1a. Fast-path: short-circuit for trivially-answerable requests
+  // Must run before subagent tag extraction (fast-path handles simple requests)
+  if (tryFastPath(body, res)) {
+    return;
+  }
+
+  // 1b. Response cache check: return cached response for identical non-streaming requests
+  const responseCacheKey = responseCache.shouldCache(body) ? responseCache.buildKey(body) : null;
+  if (responseCacheKey) {
+    const cached = responseCache.get(responseCacheKey);
+    if (cached) {
+      console.log(`[Cache] HIT for ${modelName} (key=${responseCacheKey.slice(0, 8)}…)`);
+      res.json(cached);
+      return;
+    }
+  }
+
   // Subagent model tag: <CCR-SUBAGENT-MODEL>model</CCR-SUBAGENT-MODEL> in system prompt
   // Permette di specificare un modello diverso per sessioni subagent
   const subagentModel = extractSubagentModel(body);
@@ -280,7 +300,7 @@ export async function handleProxyRequest(
   // The auto-mode classifier uses small max_tokens (1-50) which gets consumed
   // entirely by reasoning, leaving no tokens for the actual response.
   const highReasoningModels = ['deepseek', 'deepseek-r1', 'deepseek-v4'];
-  const needsBoost = highReasoningModels.some(m => 
+  const needsBoost = highReasoningModels.some(m =>
     resolution.targetModel.toLowerCase().includes(m)
   );
   const originalMaxTokens = (providerBody as any).max_tokens;
@@ -288,17 +308,17 @@ export async function handleProxyRequest(
     // DeepSeek uses chain-of-thought that consumes ~150-500+ tokens.
     // The auto-mode classifier sends 1-50 tokens which gets entirely consumed
     // by reasoning, leaving 0 tokens for the actual response.
-    // Only boost for small max_tokens (classifier-style requests).
-    const boosted = 2048;
+    // Boost generously so DeepSeek has room for both reasoning AND actual content.
+    const boosted = 4096;
     (providerBody as any).max_tokens = boosted;
-    
+
     // Add system instruction to suppress chain-of-thought reasoning
     // DeepSeek defaults to verbose analysis even for simple requests
     (providerBody as any).messages = [
       { role: 'system', content: 'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.' },
       ...((providerBody as any).messages || [])
     ];
-    
+
     console.log(`[Proxy] Boosted max_tokens from ${originalMaxTokens} to ${boosted} for ${resolution.targetModel} (reasoning overhead)`);
   }
 
@@ -352,6 +372,11 @@ export async function handleProxyRequest(
     const wantsStream = body.stream === true;
     (res as any)._wantsStream = wantsStream;
 
+    // 7b. Resolve thinking mode for this request
+    const thinkingMode = resolveThinkingMode(resolution.claudeTier, resolution.targetModel);
+    const thinkingTracker = new ThinkingBlockTracker();
+    const autoDetector = thinkingMode === 'auto' ? new AutoModeDetector(10) : null;
+
     // 8. Transform and stream response (provider SSE → Anthropic SSE)
     if (wantsStream) {
       res.setHeader('Content-Type', 'text/event-stream');
@@ -364,19 +389,40 @@ export async function handleProxyRequest(
 
       // Batch writes to reduce overhead from DeepSeek's many tiny reasoning chunks
       const buf: string[] = [];
+      const STREAM_DEADLINE = 120_000; // 120s total streaming deadline
+      const streamStart = Date.now();
+
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: realInputTokens.total,
+        thinkingEnabled: (body as any).thinking?.type === 'enabled',
       })) {
-        // Applica inflation a message_start (input) e message_delta (output)
+        // Global streaming deadline — prevents hanging on endless reasoning
+        if (Date.now() - streamStart > STREAM_DEADLINE) {
+          console.warn(`[Proxy] Streaming deadline exceeded (${STREAM_DEADLINE}ms), truncating response`);
+          break;
+        }
+
+        // Apply thinking filter before inflation
+        const effectiveMode = autoDetector?.switchedToStrip ? 'strip' : thinkingMode;
+        const filteredEvent = filterThinkingEvent(event, effectiveMode, thinkingTracker, autoDetector ? { switchedToStrip: autoDetector.switchedToStrip } : undefined);
+
+        // Track for auto mode (observe original event, before filtering)
+        if (autoDetector) {
+          autoDetector.observe(event);
+        }
+
+        if (filteredEvent === null) continue; // Thinking block stripped
+
+        // Apply inflation to message_start (input) and message_delta (output)
         if (inflationFactor !== 1) {
-          buf.push(inflateUsageTokens(event, inflationFactor));
+          buf.push(inflateUsageTokens(filteredEvent, inflationFactor));
         } else {
-          buf.push(event);
+          buf.push(filteredEvent);
         }
         // Flush in batches of 15 events or on message boundaries
-        if (buf.length >= 15 || event.includes('message_') || event.includes('"error"')) {
+        if (buf.length >= 15 || filteredEvent.includes('message_') || filteredEvent.includes('"error"')) {
           res.write(buf.join(''));
           buf.length = 0;
         }
@@ -444,7 +490,7 @@ export async function handleProxyRequest(
       const inflationFactor = getInflationFactor(resolution);
       const inflatedInput = Math.max(1, Math.round(realInputTokens.total * inflationFactor));
       const inflatedOutput = Math.max(1, Math.round(outTokens * inflationFactor));
-      res.json({
+      const responseBody = {
         id: `msg_${crypto.randomUUID()}`,
         type: 'message',
         role: 'assistant',
@@ -453,7 +499,12 @@ export async function handleProxyRequest(
         stop_reason: stopReason,
         stop_sequence: null,
         usage: { input_tokens: inflatedInput, output_tokens: inflatedOutput },
-      });
+      };
+      res.json(responseBody);
+      // Cache the response for potential retry
+      if (responseCacheKey) {
+        responseCache.set(responseCacheKey, responseBody);
+      }
       updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor, currentSessionId);
     }
   } catch (error) {

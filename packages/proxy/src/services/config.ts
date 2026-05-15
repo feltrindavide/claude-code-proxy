@@ -62,6 +62,9 @@ export const proxyConfigSchema = z.object({
   routes: z.array(modelRouteSchema),
   subagentModel: z.string().optional(),
   autoCompactThreshold: z.number().min(0).max(1).optional(),
+  thinking: z.any().optional(),
+  responseCache: z.any().optional(),
+  discoveryConfig: z.any().optional(),
 });
 
 export type AppConfig = z.infer<typeof proxyConfigSchema>;

@@ -221,6 +221,11 @@ export class OpenCodeAdapter implements ProviderAdapter {
     const heuristicParser = new HeuristicToolParser();
     yield sse.message_start();
 
+    // Track whether the upstream provider sent structured reasoning_content.
+    // When true, content is pure answer text (no embedded <think> tags), so we
+    // skip the ThinkTagParser fallback and avoid double-emission of reasoning.
+    let hasStructuredReasoning = false;
+
     try {
       for await (const event of parseSSEStream(upstreamResponse.body)) {
         // Skip [DONE] terminal event
@@ -250,30 +255,46 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content — emetti come text_delta
-        // cosi' Claude Code vede SEMPRE contenuto anche con small max_tokens
+        // Handle reasoning/thinking content — emetti come thinking_delta
+        // cosi' Claude Code lo mostra nell'UI thinking nativa (non mischiato col testo)
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) { yield evt; }
-          yield sse.emitTextDelta(reasoningContent);
+          hasStructuredReasoning = true;
+          if (options.thinkingEnabled) {
+            // Structured reasoning → thinking_delta per l'UI thinking di Claude Code
+            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+            yield sse.emitThinkingDelta(reasoningContent);
+          } else {
+            // Non-thinking mode → emit reasoning as visible text
+            for (const evt of sse.ensureTextBlock()) { yield evt; }
+            yield sse.emitTextDelta(reasoningContent);
+          }
         }
 
         // Handle text content deltas
         if (delta?.content) {
-          // Parse content through heuristic parsers for edge cases
-          for (const chunk of thinkParser.feed(delta.content)) {
-            if (chunk.type === 'thinking') {
-              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-              yield sse.emitThinkingDelta(chunk.content);
-            } else {
-              const { cleanText, tools } = heuristicParser.feed(chunk.content);
-              if (cleanText) {
-                for (const evt of sse.ensureTextBlock()) { yield evt; }
-                yield sse.emitTextDelta(cleanText);
-              }
-              for (const tool of tools) {
-                for (const evt of sse.ensureTextBlock()) { yield evt; }
-                yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+          if (hasStructuredReasoning) {
+            // Reasoning already handled via reasoning_content above.
+            // Content is pure answer text — emit directly without tag parsing.
+            for (const evt of sse.ensureTextBlock()) { yield evt; }
+            yield sse.emitTextDelta(delta.content);
+          } else {
+            // No structured reasoning — use ThinkTagParser as fallback
+            // for models that embed thinking in content as <think> tags.
+            for (const chunk of thinkParser.feed(delta.content)) {
+              if (chunk.type === 'thinking') {
+                for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+                yield sse.emitThinkingDelta(chunk.content);
+              } else {
+                const { cleanText, tools } = heuristicParser.feed(chunk.content);
+                if (cleanText) {
+                  for (const evt of sse.ensureTextBlock()) { yield evt; }
+                  yield sse.emitTextDelta(cleanText);
+                }
+                for (const tool of tools) {
+                  for (const evt of sse.ensureTextBlock()) { yield evt; }
+                  yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+                }
               }
             }
           }
@@ -317,21 +338,23 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
         // Handle finish_reason — close stream
         if (finishReason) {
-          // Flush any remaining heuristic content
-          const flushedThink = thinkParser.flush();
-          if (flushedThink) {
-            if (flushedThink.type === 'thinking') {
-              for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-              yield sse.emitThinkingDelta(flushedThink.content);
-            } else {
-              const { cleanText, tools } = heuristicParser.flush();
-              if (cleanText) {
-                for (const evt of sse.ensureTextBlock()) { yield evt; }
-                yield sse.emitTextDelta(cleanText);
-              }
-              for (const tool of tools) {
-                for (const evt of sse.ensureTextBlock()) { yield evt; }
-                yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+          if (!hasStructuredReasoning) {
+            // Flush any remaining heuristic content (only when no structured reasoning)
+            const flushedThink = thinkParser.flush();
+            if (flushedThink) {
+              if (flushedThink.type === 'thinking') {
+                for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+                yield sse.emitThinkingDelta(flushedThink.content);
+              } else {
+                const { cleanText, tools } = heuristicParser.flush();
+                if (cleanText) {
+                  for (const evt of sse.ensureTextBlock()) { yield evt; }
+                  yield sse.emitTextDelta(cleanText);
+                }
+                for (const tool of tools) {
+                  for (const evt of sse.ensureTextBlock()) { yield evt; }
+                  yield sse.emitTextDelta(`[Using ${tool.name}: ${JSON.stringify(tool.input)}]`);
+                }
               }
             }
           }
