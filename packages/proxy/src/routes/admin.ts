@@ -109,6 +109,7 @@ router.get('/providers', async (req, res) => {
         enabled: p.enabled,
         priority: p.priority,
         providerType: p.providerType || 'Custom',
+        autoDiscovered: p.autoDiscovered || false,
       };
     }));
     
@@ -565,6 +566,66 @@ router.post('/validation-results/:id/dismiss', (req, res) => {
   } catch (error) {
     console.error('[Admin] Error dismissing warning:', error);
     res.status(500).json({ error: 'Failed to dismiss warning' });
+  }
+});
+
+/**
+ * GET /admin/thinking-config
+ * Return current thinking filter configuration
+ */
+router.get('/thinking-config', (req, res) => {
+  try {
+    const config = configService.load();
+    res.json(config.thinking || {});
+  } catch (error) {
+    console.error('[Admin] Error loading thinking config:', error);
+    res.status(500).json({ error: 'Failed to load thinking config' });
+  }
+});
+
+/**
+ * PUT /admin/thinking-config
+ * Update thinking filter configuration
+ */
+router.put('/thinking-config', (req, res) => {
+  try {
+    const config = configService.load();
+    config.thinking = req.body;
+    configService.save(config);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Admin] Error saving thinking config:', error);
+    res.status(500).json({ error: 'Failed to save thinking config' });
+  }
+});
+
+/**
+ * GET /admin/cache-config
+ * Return current response cache configuration
+ */
+router.get('/cache-config', (req, res) => {
+  try {
+    const config = configService.load();
+    res.json(config.responseCache || { enabled: true, ttlMs: 10000, maxEntries: 50 });
+  } catch (error) {
+    console.error('[Admin] Error loading cache config:', error);
+    res.status(500).json({ error: 'Failed to load cache config' });
+  }
+});
+
+/**
+ * PUT /admin/cache-config
+ * Update response cache configuration
+ */
+router.put('/cache-config', (req, res) => {
+  try {
+    const config = configService.load();
+    config.responseCache = req.body;
+    configService.save(config);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[Admin] Error saving cache config:', error);
+    res.status(500).json({ error: 'Failed to save cache config' });
   }
 });
 

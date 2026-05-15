@@ -23,15 +23,18 @@ export default function PopupPage() {
   const [health, setHealth] = useState<any>(null);
   const [routes, setRoutes] = useState<RouteEntry[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [discoveredCount, setDiscoveredCount] = useState(0);
   const refresh = useCallback(async () => {
     try {
-      const [h, r, p] = await Promise.all([
+      const [h, r, p, d] = await Promise.all([
         fetch(`${API}/health`).then(r => r.json()),
         fetch(`${API}/admin/routes`).then(r => r.json()),
         fetch(`${API}/admin/providers`).then(r => r.json()),
+        fetch(`${API}/admin/discovery`).then(r => r.json()).catch(() => ({ providers: [] })),
       ]);
       setHealth(h); setStatus('running');
       setRoutes(Array.isArray(r) ? r : (r.routes || [])); setProviders(p);
+      setDiscoveredCount(d.providers?.filter((pr: any) => pr.reachable)?.length || 0);
     } catch { setStatus('stopped'); setHealth(null); }
   }, []);
 
@@ -142,6 +145,16 @@ export default function PopupPage() {
           );
         })}
       </div>
+
+      {/* Discovery status */}
+      {discoveredCount > 0 && (
+        <div style={{
+          background: 'rgba(90,200,250,0.08)', borderRadius: 8, padding: '8px 12px', marginBottom: 10,
+          fontSize: 11, color: 'var(--color-muted)',
+        }}>
+          {discoveredCount} local provider{discoveredCount !== 1 ? 's' : ''} auto-detected
+        </div>
+      )}
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: 8 }}>

@@ -31,6 +31,7 @@ import type { SessionUsage } from './services/session-tracker.js';
 import { extractSessionId, updateSessionUsage, getSessionUsage } from './services/session-tracker.js';
 import { tryFastPath } from './services/fast-path.js';
 import { responseCache } from './services/response-cache.js';
+import { configService } from './services/config.js';
 import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlockTracker } from './services/thinking-filter.js';
 
 /**
@@ -372,8 +373,13 @@ export async function handleProxyRequest(
     const wantsStream = body.stream === true;
     (res as any)._wantsStream = wantsStream;
 
-    // 7b. Resolve thinking mode for this request
-    const thinkingMode = resolveThinkingMode(resolution.claudeTier, resolution.targetModel);
+    // 7b. Decide if thinking was requested by Claude Code (high-effort mode)
+    // This controls whether adapters emit native thinking_delta events or convert to text
+    const thinkingEnabled = (body as any).thinking?.type === 'enabled';
+
+    // 7c. Resolve thinking mode for this request (load persisted config from disk)
+    const savedConfig = configService.load();
+    const thinkingMode = resolveThinkingMode(resolution.claudeTier, resolution.targetModel, savedConfig.thinking as any);
     const thinkingTracker = new ThinkingBlockTracker();
     const autoDetector = thinkingMode === 'auto' ? new AutoModeDetector(10) : null;
 
@@ -396,7 +402,7 @@ export async function handleProxyRequest(
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: realInputTokens.total,
-        thinkingEnabled: (body as any).thinking?.type === 'enabled',
+        thinkingEnabled,
       })) {
         // Global streaming deadline — prevents hanging on endless reasoning
         if (Date.now() - streamStart > STREAM_DEADLINE) {
@@ -445,6 +451,7 @@ export async function handleProxyRequest(
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: realInputTokens.total,
+        thinkingEnabled,
       })) {
         // Parse SSE event to extract data
         const dataMatch = event.match(/^data: (.+)$/m);

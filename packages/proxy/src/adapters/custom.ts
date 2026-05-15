@@ -299,15 +299,9 @@ export class CustomAdapter implements ProviderAdapter {
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
           hasStructuredReasoning = true;
-          if (options.thinkingEnabled) {
-            // Structured reasoning → thinking_delta per l'UI thinking di Claude Code
-            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
-            yield sse.emitThinkingDelta(reasoningContent);
-          } else {
-            // Non-thinking mode → emit reasoning as visible text
-            for (const evt of sse.ensureTextBlock()) { yield evt; }
-            yield sse.emitTextDelta(reasoningContent);
-          }
+          // Auto-detect: reasoning_content presente → thinking_delta per UI nativa
+          for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+          yield sse.emitThinkingDelta(reasoningContent);
         }
 
         // Handle text content deltas

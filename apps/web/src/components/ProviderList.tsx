@@ -19,6 +19,7 @@ interface Provider {
   enabled: boolean;
   priority: number;
   providerType?: string;
+  autoDiscovered?: boolean;
 }
 
 export function ProviderList() {
@@ -132,6 +133,11 @@ export function ProviderList() {
               <span className="bg-surface-strong text-ink text-[11px] font-semibold uppercase tracking-[0.88px] rounded-pill px-[10px] py-xxs">
                 {p.enabled ? 'Enabled' : 'Disabled'}
               </span>
+              {p.autoDiscovered && (
+                <span className="bg-primary/10 text-primary text-[11px] font-semibold uppercase tracking-[0.88px] rounded-pill px-[10px] py-xxs">
+                  Auto
+                </span>
+              )}
               {!isProviderHealthy(p.name) && (
                 <WarningBadge message={getProviderError(p.name) || 'Connection failed'} />
               )}

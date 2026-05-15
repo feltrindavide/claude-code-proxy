@@ -1,12 +1,14 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { fetchConfig } from '@/lib/api';
+import { fetchConfig, fetchThinkingConfig, saveThinkingConfig, fetchCacheConfig, saveCacheConfig } from '@/lib/api';
+import type { ThinkingConfig, CacheConfig, TierThinkingConfig } from '@/lib/api';
 import { openDownloadPage } from '@/services/updater';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { Shield, RefreshCw } from 'lucide-react';
+import { Select } from '@/components/ui/Select';
+import { Shield, RefreshCw, Brain, Database } from 'lucide-react';
 
 export function SettingsForm() {
   const { toast } = useToast();
@@ -18,8 +20,17 @@ export function SettingsForm() {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
+  // Thinking config
+  const [thinkingConfig, setThinkingConfig] = useState<ThinkingConfig | null>(null);
+  const [savingThinking, setSavingThinking] = useState(false);
+
+  // Cache config
+  const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
+  const [savingCache, setSavingCache] = useState(false);
+
   useEffect(() => {
     loadSettings();
+    loadAdvancedConfig();
   }, []);
 
   async function loadSettings() {
@@ -35,6 +46,53 @@ export function SettingsForm() {
     } catch {
       setKeychainAvailable(false);
     }
+  }
+
+  async function loadAdvancedConfig() {
+    try {
+      const [thinking, cache] = await Promise.all([
+        fetchThinkingConfig().catch(() => null),
+        fetchCacheConfig().catch(() => null),
+      ]);
+      if (thinking) setThinkingConfig(thinking);
+      if (cache) setCacheConfig(cache);
+    } catch {}
+  }
+
+  async function handleSaveThinking() {
+    if (!thinkingConfig) return;
+    setSavingThinking(true);
+    try {
+      await saveThinkingConfig(thinkingConfig);
+      toast('Thinking config saved', 'success');
+    } catch {
+      toast('Failed to save thinking config', 'error');
+    } finally {
+      setSavingThinking(false);
+    }
+  }
+
+  async function handleSaveCache() {
+    if (!cacheConfig) return;
+    setSavingCache(true);
+    try {
+      await saveCacheConfig(cacheConfig);
+      toast('Cache config saved', 'success');
+    } catch {
+      toast('Failed to save cache config', 'error');
+    } finally {
+      setSavingCache(false);
+    }
+  }
+
+  function updateTierMode(tier: 'opus' | 'sonnet' | 'haiku', mode: TierThinkingConfig['mode']) {
+    if (!thinkingConfig) return;
+    setThinkingConfig({ ...thinkingConfig, [tier]: { mode } });
+  }
+
+  function updateCacheField(field: keyof CacheConfig, value: number | boolean) {
+    if (!cacheConfig) return;
+    setCacheConfig({ ...cacheConfig, [field]: value });
   }
 
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
@@ -130,6 +188,102 @@ export function SettingsForm() {
           API keys are stored securely in macOS Keychain and never appear in config files.
         </p>
       </Card>
+
+      {/* Thinking Control */}
+      {thinkingConfig && (
+        <Card title={
+          <span className="flex items-center gap-xs">
+            <Brain className="w-4 h-4" />
+            Thinking Control
+          </span>
+        }>
+          <p className="text-body text-muted mb-md">
+            Control how thinking/reasoning blocks are handled per Claude tier.
+          </p>
+          <div className="space-y-md">
+            {(['opus', 'sonnet', 'haiku'] as const).map((tier) => (
+              <div key={tier} className="flex items-center gap-lg">
+                <div className="w-24">
+                  <p className="font-heading text-[16px] font-semibold text-ink capitalize">{tier}</p>
+                </div>
+                <div className="flex-1">
+                  <Select
+                    value={thinkingConfig[tier]?.mode || 'passthrough'}
+                    onChange={(v) => updateTierMode(tier, v as TierThinkingConfig['mode'])}
+                    options={[
+                      { value: 'passthrough', label: 'Passthrough' },
+                      { value: 'strip', label: 'Strip' },
+                      { value: 'transform', label: 'Transform' },
+                      { value: 'auto', label: 'Auto' },
+                    ]}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-md">
+            <Button
+              variant="secondary"
+              onClick={handleSaveThinking}
+              loading={savingThinking}
+              loadingText="Saving..."
+            >
+              Save Thinking Config
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Response Cache */}
+      {cacheConfig && (
+        <Card title={
+          <span className="flex items-center gap-xs">
+            <Database className="w-4 h-4" />
+            Response Cache
+          </span>
+        }>
+          <p className="text-body text-muted mb-md">
+            Cache non-streaming responses to avoid redundant upstream calls on retry.
+          </p>
+          <div className="space-y-lg">
+            <label className="flex items-center gap-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cacheConfig.enabled}
+                onChange={(e) => updateCacheField('enabled', e.target.checked)}
+                className="w-4 h-4 rounded border-hairline text-primary focus:ring-primary"
+              />
+              <span className="text-sm text-body">Enable response caching</span>
+            </label>
+
+            <Input
+              label="TTL (ms)"
+              type="number"
+              value={String(cacheConfig.ttlMs)}
+              onChange={(e) => updateCacheField('ttlMs', parseInt(e.target.value) || 10000)}
+              placeholder="10000"
+            />
+
+            <Input
+              label="Max Entries"
+              type="number"
+              value={String(cacheConfig.maxEntries)}
+              onChange={(e) => updateCacheField('maxEntries', parseInt(e.target.value) || 50)}
+              placeholder="50"
+            />
+          </div>
+          <div className="mt-md">
+            <Button
+              variant="secondary"
+              onClick={handleSaveCache}
+              loading={savingCache}
+              loadingText="Saving..."
+            >
+              Save Cache Config
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {/* About */}
       <Card title="About">

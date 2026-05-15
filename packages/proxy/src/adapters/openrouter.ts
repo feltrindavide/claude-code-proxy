@@ -51,7 +51,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
    */
   async *transformResponse(
     upstreamResponse: Response,
-    _options: TransformOptions,
+    options: TransformOptions,
   ): AsyncIterable<string> {
     if (!upstreamResponse.body) {
       yield this.emitError('Empty response body from provider');
@@ -72,8 +72,46 @@ export class OpenRouterAdapter implements ProviderAdapter {
 
         try {
           const parsed = JSON.parse(event.data);
-          
-          // Convert thinking blocks to text blocks
+
+          // If the model emits content_block_start with type "thinking", stay in
+          // thinking passthrough for the rest of this block. This way even when
+          // Claude Code didn't request high-effort mode, if the upstream provider
+          // sends native thinking events we preserve them for Claude Code's UI.
+          if (parsed.type === 'content_block_start') {
+            const blockType = parsed.content_block?.type;
+            if (blockType === 'thinking' || blockType === 'redacted_thinking') {
+              inThinking = true;
+            } else {
+              inThinking = false;
+            }
+          }
+
+          // When thinking is enabled (either by client request or because the
+          // provider sent thinking blocks), passthrough native thinking_delta
+          // events so Claude Code displays them semi-transparent.
+          if (options.thinkingEnabled || inThinking) {
+            // Passthrough thinking blocks as-is
+            if (parsed.type === 'content_block_start') {
+              const blockType = parsed.content_block?.type;
+              if (blockType === 'thinking' || blockType === 'redacted_thinking') {
+                inThinking = true;
+              } else {
+                inThinking = false;
+              }
+            }
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'signature_delta') {
+              return; // Skip signature deltas regardless
+            }
+            if (inThinking && parsed.type === 'content_block_stop') {
+              inThinking = false;
+            }
+            // Forward the event unchanged
+            const eventType = event.event || 'message';
+            events.push(`event: ${eventType}\ndata: ${event.data}\n\n`);
+            return;
+          }
+
+          // When thinking is NOT enabled: convert thinking blocks to text blocks
           if (parsed.type === 'content_block_start') {
             const blockType = parsed.content_block?.type;
             if (blockType === 'thinking' || blockType === 'redacted_thinking') {
@@ -89,7 +127,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
             }
             inThinking = false;
           }
-          
+
           // Convert thinking deltas to text deltas
           if (inThinking && parsed.type === 'content_block_delta') {
             if (parsed.delta?.type === 'thinking_delta') {
@@ -104,7 +142,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
             // Skip non-thinking deltas during thinking block (e.g. signature_delta)
             if (parsed.delta?.type === 'signature_delta') return;
           }
-          
+
           if (inThinking && parsed.type === 'content_block_stop') {
             inThinking = false;
             // Pass through content_block_stop (the client sees a text block stop)
