@@ -250,15 +250,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content — emit as text so the response
-        // has content even with small max_tokens. DeepSeek's reasoning is verbose
-        // but better than empty responses.
+        // Handle reasoning/thinking content
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) {
-            yield evt;
+          if (options.thinkingEnabled) {
+            // Emit as thinking blocks — Claude Code expects them when thinking is enabled
+            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+            yield sse.emitThinkingDelta(reasoningContent);
+          } else {
+            // Emit as text — for non-thinking requests, Claude Code needs to see content
+            for (const evt of sse.ensureTextBlock()) { yield evt; }
+            yield sse.emitTextDelta(reasoningContent);
           }
-          yield sse.emitTextDelta(reasoningContent);
         }
 
         // Handle text content deltas

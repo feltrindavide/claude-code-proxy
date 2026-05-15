@@ -290,13 +290,16 @@ export class CustomAdapter implements ProviderAdapter {
           | undefined;
         const finishReason = choice.finish_reason as string | null | undefined;
 
-        // Handle reasoning/thinking content — emit as text so the response has content
+        // Handle reasoning/thinking content
         const reasoningContent = (delta as any)?.reasoning_content as string | undefined;
         if (reasoningContent) {
-          for (const evt of sse.ensureTextBlock()) {
-            yield evt;
+          if (options.thinkingEnabled) {
+            for (const evt of sse.ensureThinkingBlock()) { yield evt; }
+            yield sse.emitThinkingDelta(reasoningContent);
+          } else {
+            for (const evt of sse.ensureTextBlock()) { yield evt; }
+            yield sse.emitTextDelta(reasoningContent);
           }
-          yield sse.emitTextDelta(reasoningContent);
         }
 
         // Handle text content deltas

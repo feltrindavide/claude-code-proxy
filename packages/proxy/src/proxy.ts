@@ -352,7 +352,10 @@ export async function handleProxyRequest(
     const wantsStream = body.stream === true;
     (res as any)._wantsStream = wantsStream;
 
-    // 8. Transform and stream response (provider SSE → Anthropic SSE)
+    // 8. Controlla se la richiesta originale aveva thinking abilitato
+    const thinkingEnabled = (body as any).thinking?.type === 'enabled';
+
+    // 9. Transform and stream response (provider SSE → Anthropic SSE)
     if (wantsStream) {
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -368,6 +371,7 @@ export async function handleProxyRequest(
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: realInputTokens.total,
+        thinkingEnabled,
       })) {
         // Applica inflation a message_start (input) e message_delta (output)
         if (inflationFactor !== 1) {
@@ -399,6 +403,7 @@ export async function handleProxyRequest(
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
         inputTokens: realInputTokens.total,
+        thinkingEnabled,
       })) {
         // Parse SSE event to extract data
         const dataMatch = event.match(/^data: (.+)$/m);
