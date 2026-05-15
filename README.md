@@ -53,9 +53,10 @@ The proxy handles routing automatically. Check for updates in **Settings → Abo
 | 🔧 **Tool arg repair** | Auto-fixes malformed JSON in tool call arguments (single quotes, trailing commas, unquoted keys) |
 | 🏷️ **Subagent model tag** | `<CCR-SUBAGENT-MODEL>` in system prompt to route subagents to a different model |
 | 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model, provider, tier, and context fill |
-| 📟 **Per-session status line** | Auto-installed context bar showing model, folder, context %, inflation for the current session |
+| 📟 **Per-session status line** | Auto-installed bold context bar. Each session sees its own model, folder, context %, and inflation. Reads `session_id` from stdin. |
 | 🔄 **Auto-compact hook** | Automatically suggests compacting when context exceeds configurable threshold (default 70%) |
 | 🚀 **Partial model matching** | Type `glm-4.5-air` instead of `z-ai/glm-4.5-air:free` — proxy finds the closest match |
+| 🗂️ **Structured directory** | `~/.claude/claude-code-proxy/` with `data/`, `logs/`, `scripts/`, `config-backup/` |
 
 ## Menu bar popup
 
