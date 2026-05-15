@@ -97,8 +97,9 @@ async function main() {
     const folder = (folderFromStdin || process.cwd()).split('/').pop() || '';
 
     // 5. Progress bar (10 segmenti) con colore
-    // Almeno 1 segmento se ci sono token usati, anche a % bassa
-    const pct = Math.min(100, Math.round((totalUsed / maxContext) * 100));
+    // Almeno 1 segmento se ci sono token usati
+    const pctRaw = (totalUsed / maxContext) * 100;
+    const pct = Math.min(100, Math.round(pctRaw));
     const segs = 10;
     const filled = Math.min(segs, Math.max(totalUsed > 0 ? 1 : 0, Math.round((pct / 100) * segs)));
     const empty = segs - filled;
@@ -118,8 +119,10 @@ async function main() {
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
     const infl = inflation === 1 ? '' : ` ×${inflation.toFixed(1)}`;
+    // Mostra 1 decimale per % < 10, intero per % >= 10
+    const pctDisplay = pctRaw < 10 ? pctRaw.toFixed(1) : String(pct);
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
-    const pctStr = pctColor ? `${pctColor}${pct}%${RESET}` : `${pct}%`;
+    const pctStr = pctColor ? `${pctColor}${pctDisplay}%${RESET}` : `${pctDisplay}%`;
 
     const folderTag = folder ? ` │ ${folder}` : '';
 
