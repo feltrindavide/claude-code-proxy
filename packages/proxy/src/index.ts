@@ -55,8 +55,11 @@ try {
 // Mount admin API routes (D-05)
 app.use('/admin', adminRouter);
 
-// Health check endpoint (D-02)
-app.get('/health', (req, res) => {
+  // Mount system proxy setup route
+  setupSystemProxyRoutes();
+
+  // Health check endpoint (D-02)
+  app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     port: DEFAULT_PORT,
@@ -526,6 +529,121 @@ function setupLaunchctlEnv(): void {
 }
 
 /**
+ * Crea un certificato self-signed per api.anthropic.com se non esiste già.
+ * Salva in ~/.claude/claude-code-proxy/data/certs/
+ */
+function ensureCert(): { key: string; cert: string } | null {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (!home) return null;
+
+  const certDir = path.join(home, '.claude', 'claude-code-proxy', 'data', 'certs');
+  const keyPath = path.join(certDir, 'api.anthropic.com-key.pem');
+  const certPath = path.join(certDir, 'api.anthropic.com.pem');
+
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    return { key: keyPath, cert: certPath };
+  }
+
+  try {
+    fs.mkdirSync(certDir, { recursive: true, mode: 0o700 });
+    // Genera certificato self-signed usando openssl (disponibile su macOS)
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 3650 -nodes ` +
+      `-subj "/CN=api.anthropic.com/O=ClaudeCodeProxy/C=IT" ` +
+      `-addext "subjectAltName=DNS:api.anthropic.com,DNS:localhost,IP:127.0.0.1"`,
+      { timeout: 10000 },
+    );
+    // Permessi restrittivi
+    fs.chmodSync(keyPath, 0o600);
+    fs.chmodSync(certPath, 0o644);
+    console.log('[Setup] Generated self-signed cert for api.anthropic.com');
+    return { key: keyPath, cert: certPath };
+  } catch (err) {
+    console.warn('[Setup] Failed to generate cert:', err instanceof Error ? err.message : 'unknown');
+    return null;
+  }
+}
+
+/**
+ * Avvia server HTTPS per Claude Desktop (sulla porta 3457 o sulla stessa).
+ */
+let httpsServer: ReturnType<typeof import('https').createServer> | null = null;
+
+function startHttpsServer(app: express.Application, httpsPort: number): void {
+  const certs = ensureCert();
+  if (!certs) {
+    console.warn('[Setup] HTTPS server not started (no certs)');
+    return;
+  }
+
+  try {
+    const https = require('https') as typeof import('https');
+    const tlsOptions = {
+      key: fs.readFileSync(certs.key),
+      cert: fs.readFileSync(certs.cert),
+    };
+
+    httpsServer = https.createServer(tlsOptions, app);
+    httpsServer.listen(httpsPort, '127.0.0.1', () => {
+      console.log(`[Proxy] HTTPS server for Desktop on https://127.0.0.1:${httpsPort}`);
+    });
+    httpsServer.on('error', (err: Error) => {
+      console.warn(`[Setup] HTTPS server error: ${err.message}`);
+    });
+  } catch (err) {
+    console.warn('[Setup] Failed to start HTTPS server:', err instanceof Error ? err.message : 'unknown');
+  }
+}
+
+/**
+ * POST /admin/setup-desktop — configura il sistema per Claude Desktop.
+ * Richiede privilegi admin (mostra dialogo macOS).
+ * 1. /etc/hosts: api.anthropic.com → 127.0.0.1
+ * 2. Fidati del certificato self-signed nel keychain di sistema
+ * 3. pf: redirige porta 443 → porta HTTPS del proxy
+ */
+function setupSystemProxyRoutes(): void {
+  app.post('/admin/setup-desktop', express.json(), async (_req, res) => {
+    try {
+      const certs = ensureCert();
+      if (!certs) {
+        return res.status(500).json({ error: 'Failed to generate certificate' });
+      }
+
+      const httpsPort = 3457;
+      const script = `
+        do shell script "
+          # 1. Hosts: api.anthropic.com → 127.0.0.1
+          if ! grep -q 'api.anthropic.com' /etc/hosts; then
+            echo '127.0.0.1 api.anthropic.com' >> /etc/hosts
+          fi
+
+          # 2. Trust the self-signed cert in system keychain
+          security add-trusted-cert -d -r trustAsRoot -p ssl -k /Library/Keychains/System.keychain "${certs.cert}" 2>/dev/null || true
+
+          # 3. pf: 443 → ${httpsPort}
+          echo 'rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${httpsPort}' | /sbin/pfctl -ef - 2>/dev/null
+
+          # 4. Keep pf running (disable automatic reset)
+          echo 'net.inet.ip.fw.enable=1' | sysctl -w 2>/dev/null || true
+        " with administrator privileges
+      `;
+
+      execSync(`osascript -e '${script}'`, { timeout: 60000, encoding: 'utf-8' });
+
+      res.json({
+        success: true,
+        message: `Claude Desktop configured. Proxy HTTPS on port ${httpsPort}. Restart Claude Desktop.`,
+      });
+    } catch (e) {
+      res.status(500).json({
+        error: 'Setup failed. Make sure you have admin privileges and try again.',
+      });
+    }
+  });
+}
+
+/**
  * Start the Express server
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
@@ -544,6 +662,8 @@ export async function startServer(port: number = DEFAULT_PORT, host: string = DE
       console.log(`[Proxy] Admin API:  http://${host}:${port}/admin`);
       console.log(`[Proxy] Health:   http://${host}:${port}/health`);
       console.log(`[Proxy] Proxy:    http://${host}:${port}/v1/*`);
+      // Avvia server HTTPS per Claude Desktop (porta 3457)
+      startHttpsServer(app, 3457);
       resolve();
     });
 
