@@ -132,7 +132,7 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
-    const infl = inflation === 1 ? '' : ` ×${inflation.toFixed(1)}`;
+    const infl = inflation > 1 ? ` ×${inflation.toFixed(1)}` : '';
     // Mostra 1 decimale per % < 10, intero per % >= 10
     const pctDisplay = pctRaw < 10 ? pctRaw.toFixed(1) : String(pct);
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
