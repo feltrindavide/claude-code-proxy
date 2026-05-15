@@ -96,10 +96,12 @@ async function main() {
     // 4. Nome cartella: da stdin > process.cwd
     const folder = (folderFromStdin || process.cwd()).split('/').pop() || '';
 
-    // 5. Progress bar (8 segmenti) con colore
+    // 5. Progress bar (10 segmenti) con colore
+    // Almeno 1 segmento se ci sono token usati, anche a % bassa
     const pct = Math.min(100, Math.round((totalUsed / maxContext) * 100));
-    const filled = Math.min(8, Math.round((pct / 100) * 8));
-    const empty = 8 - filled;
+    const segs = 10;
+    const filled = Math.min(segs, Math.max(totalUsed > 0 ? 1 : 0, Math.round((pct / 100) * segs)));
+    const empty = segs - filled;
 
     let barColor = GREEN;
     if (pct > 80) barColor = RED;
