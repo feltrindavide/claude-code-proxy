@@ -596,9 +596,8 @@ function startHttpsServer(app: express.Application, httpsPort: number): void {
 }
 
 /**
- * POST /admin/setup-desktop — configura il sistema per Claude Desktop.
- * Scrive uno script temporaneo ed esegue via osascript per evitare problemi
- * di escaping con le virgolette.
+ * POST /admin/setup-desktop — scrive lo script di setup.
+ * L'utente lo esegue con: sudo ~/.claude/claude-code-proxy/scripts/setup-desktop.sh
  */
 function setupSystemProxyRoutes(): void {
   app.post('/admin/setup-desktop', express.json(), async (_req, res) => {
@@ -612,11 +611,14 @@ function setupSystemProxyRoutes(): void {
       const setupScript = path.join(home, '.claude', 'claude-code-proxy', 'scripts', 'setup-desktop.sh');
       const httpsPort = 8743;
 
-      // Crea script di setup
       const scriptContent = `#!/bin/bash
-# Claude Code Proxy — Desktop setup (run with sudo)
+# Claude Code Proxy — Desktop setup
+# Run: sudo bash "$0"
 
-# 1. /etc/hosts entry
+echo "=== Claude Code Proxy - Desktop Setup ==="
+echo ""
+
+# 1. /etc/hosts
 if ! grep -q "api.anthropic.com" /etc/hosts 2>/dev/null; then
   echo "127.0.0.1 api.anthropic.com" >> /etc/hosts
   echo "[OK] Added api.anthropic.com to /etc/hosts"
@@ -625,40 +627,47 @@ else
 fi
 
 # 2. Trust self-signed cert
-if [ -f "${certs.cert}" ]; then
-  security add-trusted-cert -d -r trustAsRoot -p ssl -k /Library/Keychains/System.keychain "${certs.cert}" 2>/dev/null
-  echo "[OK] Certificate trusted in system keychain"
+CERT="${certs.cert}"
+if [ -f "$CERT" ]; then
+  security add-trusted-cert -d -r trustAsRoot -p ssl -k /Library/Keychains/System.keychain "$CERT" 2>/dev/null && \\
+    echo "[OK] Certificate trusted in system keychain" || \\
+    echo "[WARN] Could not trust certificate (may already be trusted)"
 fi
 
-# 3. pf: redirect 443 → ${httpsPort}
-echo "rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port ${httpsPort}" | /sbin/pfctl -ef - 2>/dev/null
+# 3. pf anchor for port redirect
+echo "rdr pass on lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port ${httpsPort}" > /tmp/ccp-pf.conf
+if [ -f "/etc/pf.anchors/com.claudecode.proxy" ]; then
+  cp /tmp/ccp-pf.conf /etc/pf.anchors/com.claudecode.proxy
+else
+  cp /tmp/ccp-pf.conf /etc/pf.anchors/com.claudecode.proxy 2>/dev/null
+  # Add anchor to pf.conf if needed
+  if ! grep -q "com.claudecode.proxy" /etc/pf.conf 2>/dev/null; then
+    sed -i '' 's/rdr-anchor "com.apple\\/\\*"/rdr-anchor "com.apple\\/*"\\nrdr-anchor "com.claudecode.proxy"/' /etc/pf.conf
+    sed -i '' 's/load anchor "com.apple"/load anchor "com.apple"\\nload anchor "com.claudecode.proxy"/' /etc/pf.conf
+  fi
+fi
+/sbin/pfctl -a "com.claudecode.proxy" -f /etc/pf.anchors/com.claudecode.proxy 2>/dev/null
+/sbin/pfctl -e 2>/dev/null
 echo "[OK] pf: port 443 → ${httpsPort}"
 
-# 4. Enable ip forwarding
-sysctl -w net.inet.ip.fw.enable=1 2>/dev/null || true
+rm -f /tmp/ccp-pf.conf
 
 echo ""
-echo "Done. Restart Claude Desktop for changes to take effect."
+echo "=== Setup complete ==="
+echo "Restart Claude Desktop (Cmd+Q, reopen) for changes to take effect."
+echo "To verify: curl -sk https://api.anthropic.com/health"
 `;
 
       fs.writeFileSync(setupScript, scriptContent, { mode: 0o755 });
 
-      // Esegui via osascript con privilegi amministratore
-      execSync(
-        `osascript -e 'do shell script "${setupScript}" with administrator privileges'`,
-        { timeout: 120000, encoding: 'utf-8' },
-      );
-
       res.json({
         success: true,
-        message: `Claude Desktop configured. Proxy HTTPS on port ${httpsPort}. Restart Claude Desktop.`,
+        message: `Setup script created. Run it with: sudo bash ${setupScript}`,
+        scriptPath: setupScript,
+        command: `sudo bash "${setupScript}"`,
       });
     } catch (e: any) {
-      const msg = e?.stderr?.toString() || e?.message || 'Unknown error';
-      console.error('[Setup] Desktop setup failed:', msg);
-      res.status(500).json({
-        error: `Setup failed: ${msg}`,
-      });
+      res.status(500).json({ error: 'Failed to create setup script.' });
     }
   });
 }
