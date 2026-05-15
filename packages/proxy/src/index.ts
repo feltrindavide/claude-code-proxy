@@ -565,7 +565,7 @@ function ensureCert(): { key: string; cert: string } | null {
 }
 
 /**
- * Avvia server HTTPS per Claude Desktop (sulla porta 3457 o sulla stessa).
+ * Avvia server HTTPS per Claude Desktop.
  */
 let httpsServer: ReturnType<typeof import('https').createServer> | null = null;
 
@@ -610,7 +610,7 @@ function setupSystemProxyRoutes(): void {
 
       const home = process.env.HOME || '';
       const setupScript = path.join(home, '.claude', 'claude-code-proxy', 'scripts', 'setup-desktop.sh');
-      const httpsPort = 3457;
+      const httpsPort = 8743;
 
       // Crea script di setup
       const scriptContent = `#!/bin/bash
@@ -682,8 +682,8 @@ export async function startServer(port: number = DEFAULT_PORT, host: string = DE
       console.log(`[Proxy] Admin API:  http://${host}:${port}/admin`);
       console.log(`[Proxy] Health:   http://${host}:${port}/health`);
       console.log(`[Proxy] Proxy:    http://${host}:${port}/v1/*`);
-      // Avvia server HTTPS per Claude Desktop (porta 3457)
-      startHttpsServer(app, 3457);
+      // Avvia server HTTPS per Claude Desktop (porta 8743)
+      startHttpsServer(app, 8743);
       resolve();
     });
 
