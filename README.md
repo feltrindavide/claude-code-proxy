@@ -62,14 +62,18 @@ Then fully quit and reopen Claude Desktop. All requests (chat, cowork, code) wil
 | 🎨 **Provider types** | OpenRouter, OpenCode Zen/Go, Ollama, Custom |
 | ⚙️ **Custom API format** | Choose OpenAI or Anthropic format for custom providers |
 | ⌨️ **Quick popup** | Click tray icon for status, start/stop, quick mapping |
-| 📐 **Per-session context tracking** | Each Claude Code session has independent model, tokens, and context tracking. Session-aware status line. |
+| 📐 **Per-session context tracking** | Each Claude Code session has independent model, tokens, and context tracking. Session-aware status line reads `session_id` from stdin. |
 | 🧠 **Smart token limits** | Auto-boosts small `max_tokens` for reasoning models, clamps to model limits |
 | 🎯 **Accurate token counting** | tiktoken (cl100k_base) instead of chars/4 for precise context metrics |
+| 🧠 **Thinking filter** | Per-tier control over thinking blocks: passthrough, strip, transform, or auto-detect |
+| ⚡ **Fast path** | Short-circuits trivially-answerable requests without upstream API calls |
+| 💾 **Response cache** | Caches identical non-streaming requests (configurable TTL, max 50 entries) |
+| 🔍 **Local discovery** | Auto-discovers local providers (Ollama) with auto-scanned model contexts |
 | 🔧 **Tool arg repair** | Auto-fixes malformed JSON in tool call arguments (single quotes, trailing commas, unquoted keys) |
 | 🏷️ **Subagent model tag** | `<CCR-SUBAGENT-MODEL>` in system prompt to route subagents to a different model |
-| 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see model, provider, tier, and context fill |
-| 📟 **Per-session status line** | Auto-installed bold context bar. Each session sees its own model, folder, context %, and inflation. Reads `session_id` from stdin. |
-| 🔄 **Auto-compact hook** | Automatically suggests compacting when context exceeds configurable threshold (default 70%) |
+| 🔍 **`/proxy-context`** | Type `/proxy-context` in Claude Code to see current model and context usage |
+| 📟 **Per-session status line** | Auto-installed bold context bar with model, folder, context %, per-session |
+| 🔄 **Auto-compact hook** | Suggests compacting when context exceeds configurable threshold (default 70%) |
 | 🚀 **Partial model matching** | Type `glm-4.5-air` instead of `z-ai/glm-4.5-air:free` — proxy finds the closest match |
 | 🗂️ **Structured directory** | `~/.claude/claude-code-proxy/` with `data/`, `logs/`, `scripts/`, `config-backup/` |
 
@@ -102,7 +106,7 @@ npm run tauri build  # Build .dmg
 ## Requirements
 
 - macOS 12+ (Apple Silicon or Intel)
-- Node.js 18+
+- Node.js 20+
 - Claude Code CLI: `npm install -g @anthropic-ai/claude-code`
 - `ANTHROPIC_BASE_URL` must be set to `http://localhost:3456` (auto-configured by setup)
 
