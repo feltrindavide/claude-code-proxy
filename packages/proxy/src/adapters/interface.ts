@@ -54,6 +54,8 @@ export interface ValidationResult {
   valid: boolean;
   error?: string;
   models?: string[];
+  /** Model context windows discovered during validation, keyed by model ID */
+  modelContexts?: Record<string, { context: number; max_output: number }>;
 }
 
 /**

@@ -129,18 +129,6 @@ export class ProviderService {
     this.routes = routes;
   }
 
-  /**
-   * Internal: resolve a route from a scenario or route config
-   */
-  private resolveRoute(config: { providerName: string; targetModel: string }, originalModel: string): RouteResolution | null {
-    const provider = this.providers.get(config.providerName);
-    if (!provider || !provider.enabled) return null;
-    return {
-      provider,
-      targetModel: config.targetModel,
-      originalModel: originalModel,
-    };
-  }
 }
 
 // Singleton instance (exported for admin.ts imports)

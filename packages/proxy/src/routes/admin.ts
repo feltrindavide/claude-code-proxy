@@ -78,9 +78,9 @@ router.put('/config', (req, res) => {
     
     configService.save(config);
     providerService.reload(config.providers || [], config.routes || []);
-    
+
     // Sync context registry with updated models
-    contextRegistry.syncFromConfig(config.providers || []);
+    contextRegistry.syncFromConfig(providerService.getProviders());
     
     res.json({ success: true });
   } catch (error) {
@@ -170,8 +170,8 @@ router.post('/providers', async (req, res) => {
     }
     configService.save(config);
 
-    // Sync context registry with updated models
-    contextRegistry.syncFromConfig(config.providers);
+    // Sync context registry with updated models (usa providerService, non config.json)
+    contextRegistry.syncFromConfig(providerService.getProviders());
 
     // Validate provider connectivity on save (per D-22)
     // Log warning on failure but don't block — user may fix later
@@ -231,7 +231,7 @@ router.delete('/providers/:id', async (req, res) => {
     configService.save(config);
 
     // Sync context registry after provider removal
-    contextRegistry.syncFromConfig(config.providers);
+    contextRegistry.syncFromConfig(providerService.getProviders());
 
     console.log(`[Admin] Provider ${id} deleted and config saved`);
 

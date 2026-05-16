@@ -12,6 +12,7 @@ import type { ValidationResult } from '../adapters/interface.js';
 import { getAdapter } from '../adapters/index.js';
 import { getKey } from './keychain.js';
 import { providerService } from './provider.js';
+import { contextRegistry } from './context-registry.js';
 
 /**
  * ProviderValidatorService — validates provider connectivity
@@ -101,6 +102,12 @@ export class ProviderValidatorService {
         console.log(
           `[Validator] ✓ ${provider.name} — valid (${modelCount} models)`,
         );
+        // Auto-detect model context windows from validation response
+        if (result.modelContexts) {
+          contextRegistry.updateModelContexts(provider.name, result.modelContexts);
+          const ctxCount = Object.keys(result.modelContexts).length;
+          console.log(`[Validator]   ↳ updated ${ctxCount} model context windows`);
+        }
       } else {
         console.warn(
           `[Validator] ✗ ${provider.name} — ${result.error}`,

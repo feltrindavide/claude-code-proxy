@@ -175,6 +175,29 @@ export class ContextRegistry {
   }
 
   /**
+   * Aggiorna i contesti dei modelli a partire da dati rilevati automaticamente
+   * (es. da OpenRouter /v1/models). Non sovrascrive valori personalizzati.
+   */
+  updateModelContexts(providerName: string, modelContexts: Record<string, { context: number; max_output: number }>): void {
+    const ctx = this.load();
+    let changed = false;
+    for (const [modelId, info] of Object.entries(modelContexts)) {
+      const existing = ctx.models.find(m => m.id === modelId && m.provider === providerName);
+      if (existing) {
+        if (existing.context !== info.context || existing.max_output !== info.max_output) {
+          existing.context = info.context;
+          existing.max_output = info.max_output;
+          changed = true;
+        }
+      } else {
+        ctx.models.push({ id: modelId, provider: providerName, context: info.context, max_output: info.max_output });
+        changed = true;
+      }
+    }
+    if (changed) this.save(ctx);
+  }
+
+  /**
    * Sincronizza i modelli con quelli presenti in config.json (solo quelli
    * che l'utente ha esplicitamente aggiunto in Model Library).
    * Mantiene i valori personalizzati dell'utente.
