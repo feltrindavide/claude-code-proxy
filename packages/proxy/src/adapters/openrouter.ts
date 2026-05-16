@@ -194,11 +194,19 @@ export class OpenRouterAdapter implements ProviderAdapter {
       });
       if (resp.ok) {
         const data = (await resp.json()) as {
-          data?: Array<{ id: string }>;
+          data?: Array<{ id: string; context_length?: number; max_output_tokens?: number }>;
         };
+        const models = data.data?.map((m) => m.id) ?? [];
+        const modelContexts: Record<string, { context: number; max_output: number }> = {};
+        for (const m of data.data ?? []) {
+          if (m.context_length) {
+            modelContexts[m.id] = { context: m.context_length, max_output: m.max_output_tokens ?? 8192 };
+          }
+        }
         return {
           valid: true,
-          models: data.data?.map((m) => m.id),
+          models,
+          modelContexts: Object.keys(modelContexts).length > 0 ? modelContexts : undefined,
         };
       }
       return { valid: false, error: `Validation failed: ${resp.status}` };
