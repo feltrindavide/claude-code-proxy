@@ -1,11 +1,11 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { fetchProviders, saveProvider, scanProviderModels } from '@/lib/api';
+import { fetchProviders, saveProvider, scanProviderModels, importOpenRouterModels, patchProviderModels } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Modal } from '@/components/Modal';
-import { Plus, X, Scan, Loader2 } from 'lucide-react';
+import { Plus, X, Scan, Loader2, Download } from 'lucide-react';
 
 interface ProviderModel {
   name: string;
@@ -25,6 +25,7 @@ export function ModelLibrary() {
   
   // Scan state
   const [scanningProvider, setScanningProvider] = useState<string | null>(null);
+  const [importingProvider, setImportingProvider] = useState<string | null>(null);
   const [scanResults, setScanResults] = useState<{ providerName: string; models: string[]; selected: Set<string> } | null>(null);
   const [selectAll, setSelectAll] = useState(false);
 
@@ -60,15 +61,7 @@ export function ModelLibrary() {
     }
 
     try {
-      await saveProvider({
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        apiKey: '',
-        providerType: provider.providerType || 'Custom',
-        models: [...provider.models, model],
-        enabled: provider.enabled,
-        priority: provider.priority,
-      });
+      await patchProviderModels(provider.name, [...provider.models, model]);
       setNewModelInputs(prev => ({ ...prev, [providerName]: '' }));
       toast(`Model "${model}" added`, 'success');
       loadProviders();
@@ -82,20 +75,30 @@ export function ModelLibrary() {
     if (!provider) return;
 
     try {
-      await saveProvider({
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        apiKey: '',
-        providerType: provider.providerType || 'Custom',
-        models: provider.models.filter(m => m !== model),
-        enabled: provider.enabled,
-        priority: provider.priority,
-      });
+      await patchProviderModels(provider.name, provider.models.filter(m => m !== model));
       toast(`Model "${model}" removed`, 'success');
       loadProviders();
     } catch {
       toast('Failed to remove model', 'error');
     }
+  }
+
+  async function handleOpenRouterImport(providerName: string, filter: 'all' | 'free' | 'paid' = 'free') {
+    setImportingProvider(providerName);
+    try {
+      const result = await importOpenRouterModels(providerName, filter);
+      toast(`Imported ${result.added.length} models (${result.total} total)`, 'success');
+      loadProviders();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Import failed', 'error');
+    } finally {
+      setImportingProvider(null);
+    }
+  }
+
+  function isOpenRouter(provider: ProviderModel): boolean {
+    const t = (provider.providerType || '').toLowerCase();
+    return t.includes('openrouter') || provider.baseUrl.includes('openrouter.ai');
   }
 
   async function handleScan(providerName: string) {
@@ -128,12 +131,11 @@ export function ModelLibrary() {
 
   function toggleSelectAll() {
     if (!scanResults) return;
-    if (selectAll) {
+    const allSelected = scanResults.selected.size === scanResults.models.length;
+    if (allSelected) {
       setScanResults({ ...scanResults, selected: new Set() });
-      setSelectAll(false);
     } else {
       setScanResults({ ...scanResults, selected: new Set(scanResults.models) });
-      setSelectAll(true);
     }
   }
 
@@ -151,15 +153,7 @@ export function ModelLibrary() {
     }
 
     try {
-      await saveProvider({
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        apiKey: '',
-        providerType: provider.providerType || 'Custom',
-        models: [...provider.models, ...newModels],
-        enabled: provider.enabled,
-        priority: provider.priority,
-      });
+      await patchProviderModels(provider.name, [...provider.models, ...newModels]);
       toast(`${newModels.length} model${newModels.length > 1 ? 's' : ''} added`, 'success');
       setScanResults(null);
       loadProviders();
@@ -192,7 +186,7 @@ export function ModelLibrary() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <>
       <h2 className="font-display text-[22px] text-ink mb-lg">Model Library</h2>
       <p className="text-body text-muted mb-lg">
         Manage available models for each provider. Use <strong>Scan</strong> to fetch available models from the provider API.
@@ -250,6 +244,17 @@ export function ModelLibrary() {
                 <Scan className="w-3 h-3 mr-xs" />
                 Scan
               </Button>
+              {isOpenRouter(provider) && (
+                <Button
+                  variant="secondary"
+                  onClick={() => handleOpenRouterImport(provider.name, 'free')}
+                  loading={importingProvider === provider.name}
+                  loadingText="Importing..."
+                >
+                  <Download className="w-3 h-3 mr-xs" />
+                  OpenRouter
+                </Button>
+              )}
             </div>
           </Card>
         ))}
@@ -271,12 +276,14 @@ export function ModelLibrary() {
             <label className="flex items-center gap-xs cursor-pointer">
               <input
                 type="checkbox"
-                checked={selectAll && scanResults.selected.size === scanResults.models.length}
+                checked={scanResults.selected.size === scanResults.models.length && scanResults.models.length > 0}
                 onChange={toggleSelectAll}
                 className="w-4 h-4 rounded border-hairline text-primary focus:ring-primary"
               />
               <span className="text-small text-ink font-medium">
-                {selectAll ? 'Deselect all' : 'Select all'}
+                {scanResults.selected.size === scanResults.models.length && scanResults.models.length > 0
+                  ? 'Deselect all'
+                  : 'Select all'}
               </span>
               <span className="text-small text-muted">({scanResults.models.length} available)</span>
             </label>
@@ -321,6 +328,6 @@ export function ModelLibrary() {
           </div>
         )}
       </Modal>
-    </div>
+    </>
   );
 }

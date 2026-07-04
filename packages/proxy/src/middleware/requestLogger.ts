@@ -5,6 +5,8 @@
 import onFinished from 'on-finished';
 import type { Request, Response, NextFunction } from 'express';
 import { requestLogService } from '../services/requestLog.js';
+import { eventBus } from '../services/event-bus.js';
+import { latencyTracker } from '../services/latency-tracker.js';
 import {
   proxyRequestsTotal,
   proxyUpstreamLatencyMs,
@@ -21,12 +23,14 @@ export function requestLoggerMiddleware(
 
   const startTime = Date.now();
   const requestModel = (req.body as { model?: string })?.model || 'unknown';
+  const replayId = requestLogService.storeReplayBody(req.body);
   const requestBodyPreview = requestLogService.truncateBody(req.body);
   const wantsStream = (req.body as { stream?: boolean })?.stream === true;
 
   onFinished(res, (err: Error | null) => {
     const durationMs = Date.now() - startTime;
-    const status = err ? 'error' : res.statusCode >= 400 ? 'error' : 'success';
+    const hadUpstreamError = (req as { hadUpstreamError?: boolean }).hadUpstreamError === true;
+    const status = err || hadUpstreamError || res.statusCode >= 400 ? 'error' : 'success';
     const logContext = (req as { _logContext?: Record<string, unknown> })._logContext || {};
     const provider = (logContext.providerName as string) || 'unknown';
     const tier = (logContext.claudeTier as string) || 'unknown';
@@ -44,7 +48,20 @@ export function requestLoggerMiddleware(
         { provider, stream: wantsStream ? 'true' : 'false' },
         upstreamMs,
       );
+      const targetModel = logContext.targetModel as string | undefined;
+      if (targetModel) {
+        latencyTracker.record(provider, targetModel, upstreamMs);
+      }
     }
+
+    eventBus.emit('request.completed', {
+      requestId: req.requestId || 'unknown',
+      status,
+      durationMs,
+      provider,
+      tier: logContext.claudeTier as import('../types/index.js').ClaudeTier | undefined,
+      upstreamLatencyMs: upstreamMs,
+    });
 
     requestLogService.addEntry({
       timestamp: new Date().toISOString(),
@@ -57,6 +74,7 @@ export function requestLoggerMiddleware(
       durationMs,
       statusCode: res.statusCode,
       requestBodyPreview,
+      replayId,
       retryCount: (req as { _retryAttempt?: number })._retryAttempt,
     });
   });

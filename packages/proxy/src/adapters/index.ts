@@ -62,7 +62,14 @@ export function getOrCreateAdapter(
 export function prewarmAdapters(): void {
   getOrCreateAdapter('openai', '');
   getOrCreateAdapter('anthropic', '');
-  for (const p of providerService.getProviders()) {
+  prewarmAdaptersForProviders(providerService.getProviders());
+}
+
+/** Pre-instantiate adapters only for the given providers (hot-reload selective). */
+export function prewarmAdaptersForProviders(
+  providers: Array<{ name: string; providerType?: string; baseUrl: string }>,
+): void {
+  for (const p of providers) {
     getOrCreateAdapter(p.providerType || p.name, p.baseUrl);
   }
 }

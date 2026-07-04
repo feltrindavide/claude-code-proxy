@@ -13,6 +13,7 @@ vi.mock('../../src/services/requestLog.js', () => ({
   requestLogService: {
     addEntry: vi.fn(),
     truncateBody: vi.fn((b: unknown) => JSON.stringify(b).slice(0, 100)),
+    storeReplayBody: vi.fn(() => 'replay-test-id'),
   },
 }));
 

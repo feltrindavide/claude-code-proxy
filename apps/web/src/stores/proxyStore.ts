@@ -1,11 +1,15 @@
 import { create } from 'zustand';
 import { checkHealth, startProxy, stopProxy, getProviderCount } from '@/lib/api';
+import { getProxyHttpBase, setProxyHttpBaseFromPort } from '@/lib/proxyBase';
 
 interface ProxyState {
   status: 'running' | 'stopped' | 'error' | 'loading';
   port: number | null;
+  baseUrl: string;
   version: string | null;
   startTime: Date | null;
+  uptimeMs: number | null;
+  activeStreams: number | null;
   providerCount: number;
   consecutiveFailures: number;
   lastError: string | null;
@@ -19,8 +23,11 @@ interface ProxyState {
 export const useProxyStore = create<ProxyState>((set, get) => ({
   status: 'loading',
   port: null,
+  baseUrl: getProxyHttpBase(),
   version: null,
   startTime: null,
+  uptimeMs: null,
+  activeStreams: null,
   providerCount: 0,
   consecutiveFailures: 0,
   lastError: null,
@@ -32,10 +39,14 @@ export const useProxyStore = create<ProxyState>((set, get) => ({
     const providerCount = await getProviderCount();
 
     if (health.running) {
+      if (health.port) setProxyHttpBaseFromPort(health.port);
       set((state) => ({
         status: 'running',
         port: health.port,
+        baseUrl: getProxyHttpBase(),
         version: health.version,
+        uptimeMs: health.uptimeMs ?? null,
+        activeStreams: health.activeStreams ?? null,
         startTime: state.startTime || new Date(),
         providerCount,
         consecutiveFailures: 0,
@@ -59,7 +70,6 @@ export const useProxyStore = create<ProxyState>((set, get) => ({
     const result = await startProxy();
     if (result.success) {
       set({ isStarting: false, status: 'loading', consecutiveFailures: 0 });
-      // Health polling will detect the running proxy
       await get().checkHealth();
     } else {
       set({
@@ -78,8 +88,11 @@ export const useProxyStore = create<ProxyState>((set, get) => ({
         isStopping: false,
         status: 'stopped',
         port: null,
+        baseUrl: getProxyHttpBase(),
         version: null,
         startTime: null,
+        uptimeMs: null,
+        activeStreams: null,
         providerCount: 0,
         consecutiveFailures: 0,
       });

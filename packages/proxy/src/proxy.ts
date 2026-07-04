@@ -15,6 +15,7 @@
  */
 
 import type { Request, Response } from 'express';
+import crypto from 'crypto';
 import type { RouteResolution } from './types/index.js';
 import { getOrCreateAdapter } from './adapters/index.js';
 import { getKey } from './services/keychain.js';
@@ -32,15 +33,22 @@ import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlo
 import { resolveRequest } from './services/route-resolver.js';
 import { upstreamFetch } from './services/upstream-http.js';
 import { registerActiveStream } from './services/shutdown.js';
-import { proxyCacheHitsTotal } from './metrics/prometheus.js';
+import { rateLimiterService } from './services/rateLimiter.js';
+import { proxyCacheHitsTotal, proxyExperimentRequestsTotal } from './metrics/prometheus.js';
 import { createRequestLogger, logger } from './lib/logger.js';
+import { eventBus } from './services/event-bus.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
  * Per D-26: Anthropic-compatible error format
  * Per D-28: User-friendly message, full error logged internally
  */
-function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean, reqId?: string): void {
+function markUpstreamError(req: Request): void {
+  (req as { hadUpstreamError?: boolean }).hadUpstreamError = true;
+}
+
+function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean, reqId?: string, req?: Request): void {
+  if (req) markUpstreamError(req);
   const log = reqId ? createRequestLogger(reqId) : logger;
   log.error({ err: error instanceof Error ? error.message : String(error) }, 'Upstream error');
 
@@ -69,8 +77,73 @@ function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean
   res.end();
 }
 
+function handleUpstreamFailure(
+  res: Response,
+  body: Record<string, unknown>,
+  error: unknown,
+  reqId?: string,
+  req?: Request,
+): void {
+  if (req) markUpstreamError(req);
+  const log = reqId ? createRequestLogger(reqId) : logger;
+  log.error({ err: error instanceof Error ? error.message : String(error) }, 'All route candidates failed');
+
+  const errMsg = getUserFacingErrorMessage(error);
+  const isStream = (res as any)._wantsStream;
+
+  if (isStream) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    emitSSEEvent(res, 'message_start', {
+      type: 'message_start',
+      message: {
+        id: `msg_${crypto.randomUUID()}`,
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model: body.model,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 1 },
+      },
+    });
+    emitSSEEvent(res, 'content_block_start', {
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    });
+    emitSSEEvent(res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: errMsg },
+    });
+    emitSSEEvent(res, 'content_block_stop', {
+      type: 'content_block_stop',
+      index: 0,
+    });
+    emitSSEEvent(res, 'message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
+    });
+    emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
+    res.end();
+  } else {
+    res.setHeader('Content-Type', 'application/json');
+    res.json({
+      id: `msg_${crypto.randomUUID()}`,
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: errMsg }],
+      model: body.model,
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Per-session context tracking
 // Ogni sessione Claude Code ha il proprio tracciamento.
 // ---------------------------------------------------------------------------
 
@@ -126,51 +199,169 @@ export async function handleProxyRequest(
     proxyCacheHitsTotal.inc({ hit: 'false' });
   }
 
-  // Resolve route (subagent tag, config subagent model, gateway, custom, tier)
-  const { modelName, resolution } = resolveRequest(body);
-  if (!resolution) {
+  // Resolve route (cached on req by routeResolverMiddleware)
+  const routeResult = req.resolvedRoute ?? resolveRequest(body);
+  const candidates = routeResult.candidates.length > 0
+    ? routeResult.candidates
+    : (routeResult.resolution ? [routeResult.resolution] : []);
+  const modelName = routeResult.modelName;
+
+  if (candidates.length === 0) {
     return emitAnthropicError(
       res,
       `No route configured for model: ${modelName}`,
       body.stream === true,
       req.requestId,
+      req,
     );
   }
 
   const reqLog = createRequestLogger(req.requestId || 'unknown', {
-    provider: resolution.provider.name,
     model: body.model as string,
   });
+
+  eventBus.emit('request.started', {
+    requestId: req.requestId || 'unknown',
+    model: modelName,
+    provider: candidates[0]?.provider.name,
+    tier: candidates[0]?.claudeTier,
+  });
+
+  let resolution: RouteResolution | null = null;
+  let upstreamResponse: globalThis.Response | null = null;
+  let apiKey: string | null = null;
+  let providerBody: Record<string, unknown> = {};
+  let adapter: ReturnType<typeof getOrCreateAdapter> | null = null;
+  let retryAttempt = 0;
+  const wantsStream = body.stream === true;
+  (res as any)._wantsStream = wantsStream;
+  const upstreamStart = Date.now();
+  let lastUpstreamError: unknown = null;
+
+  for (let candidateIdx = 0; candidateIdx < candidates.length; candidateIdx++) {
+    const candidate = candidates[candidateIdx];
+    if (candidateIdx > 0) {
+      const prev = candidates[candidateIdx - 1];
+      eventBus.emit('route.fallback', {
+        fromProvider: prev.provider.name,
+        toProvider: candidate.provider.name,
+        fromModel: prev.targetModel,
+        toModel: candidate.targetModel,
+        reason: lastUpstreamError instanceof Error ? lastUpstreamError.message : 'upstream failure',
+        requestId: req.requestId,
+      });
+      reqLog.warn(
+        {
+          from: prev.provider.name,
+          to: candidate.provider.name,
+          attempt: candidateIdx + 1,
+        },
+        'Failing over to alternate route candidate',
+      );
+    }
+
+    resolution = candidate;
+    apiKey = await getKey(resolution.provider.name);
+    if (!apiKey) {
+      lastUpstreamError = new Error(`API key not found for provider: ${resolution.provider.name}`);
+      if (candidateIdx === candidates.length - 1) {
+        return emitAnthropicError(
+          res,
+          lastUpstreamError instanceof Error ? lastUpstreamError.message : 'API key not found',
+          body.stream === true,
+          req.requestId,
+          req,
+        );
+      }
+      continue;
+    }
+
+    const providerType = resolution.provider.providerType || resolution.provider.name;
+    adapter = getOrCreateAdapter(providerType, resolution.provider.baseUrl);
+    providerBody = adapter.transformRequest(body, resolution);
+    const resolvedApiKey = apiKey;
+
+    try {
+      upstreamResponse = await rateLimiterService.schedule(
+        resolution.provider.name,
+        () => fetchWithRetry(
+          resolution!.provider.name,
+          async (attemptNumber) => {
+            retryAttempt = attemptNumber;
+            const controller = new AbortController();
+            const timeoutMs = wantsStream
+              ? adapter!.timeouts.streaming
+              : adapter!.timeouts.nonStreaming;
+            const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+              return await upstreamFetch(
+                `${resolution!.provider.baseUrl}${adapter!.apiPath}`,
+                {
+                  method: 'POST',
+                  headers: adapter!.buildHeaders(resolvedApiKey, {
+                    streaming: wantsStream,
+                    requestId: req.requestId,
+                  }),
+                  body: JSON.stringify(providerBody),
+                  signal: controller.signal,
+                },
+              );
+            } finally {
+              clearTimeout(timeout);
+            }
+          },
+        ),
+      );
+      break;
+    } catch (error) {
+      lastUpstreamError = error;
+      eventBus.emit('provider.error', {
+        provider: resolution.provider.name,
+        error: error instanceof Error ? error.message : String(error),
+        requestId: req.requestId,
+        targetModel: resolution.targetModel,
+      });
+      if (candidateIdx === candidates.length - 1) {
+        (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
+        return handleUpstreamFailure(res, body, error, req.requestId, req);
+      }
+    }
+  }
+
+  if (!resolution || !upstreamResponse || !adapter) {
+    return emitAnthropicError(res, 'No upstream route available', wantsStream, req.requestId, req);
+  }
 
   // Enrich request log with route resolution data (per D-45, 04-01)
   (req as any)._logContext = {
     claudeTier: resolution.claudeTier,
     providerName: resolution.provider.name,
     targetModel: resolution.targetModel,
+    experimentId: routeResult.experimentId ?? resolution.experimentId,
+    experimentVariant: routeResult.experimentVariant ?? resolution.experimentVariant,
   };
 
   if (resolution.fallbackTier && resolution.claudeTier) {
     res.setHeader('X-Proxy-Fallback-Tier', resolution.claudeTier);
   }
-
-  // 3. Get API key from Keychain
-  const apiKey = await getKey(resolution.provider.name);
-  if (!apiKey) {
-    return emitAnthropicError(
-      res,
-      `API key not found for provider: ${resolution.provider.name}`,
-      body.stream === true,
-      req.requestId,
-    );
+  if (resolution.experimentId) {
+    res.setHeader('X-Proxy-Experiment', resolution.experimentId);
+    if (resolution.experimentVariant) {
+      res.setHeader('X-Proxy-Experiment-Variant', resolution.experimentVariant);
+    }
+    proxyExperimentRequestsTotal.inc({
+      experiment: resolution.experimentId,
+      variant: resolution.experimentVariant || 'unknown',
+      tier: resolution.claudeTier || 'unknown',
+    });
   }
 
-  // 4. Select adapter — use providerType if available, fall back to provider name
-  const providerType =
-    resolution.provider.providerType || resolution.provider.name;
-  const adapter = getOrCreateAdapter(
-    providerType,
-    resolution.provider.baseUrl,
-  );
+  (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
+
+  if (retryAttempt > 0) {
+    (req as any)._retryAttempt = retryAttempt;
+  }
 
   // 5. Estrai sessionId per tracking per-sessione
   const currentSessionId = extractSessionId(body);
@@ -181,44 +372,12 @@ export async function handleProxyRequest(
   // 5b. Calcola token di input REALI per passarli a Claude Code
   const realInputTokens = countRequestTokens(body.messages, body.system, body.tools);
 
-  // 5c. Transform request body (Anthropic → provider format)
-  const providerBody = adapter.transformRequest(body, resolution);
-
   // Debug: check reasoning_content for DeepSeek
   if (resolution.targetModel?.toLowerCase().includes('deepseek') && Array.isArray(providerBody.messages)) {
     const hasRC = (providerBody.messages as any[]).filter((m: any) => m.role === 'assistant' && !m.reasoning_content).length;
     if (hasRC > 0) {
       reqLog.warn({ count: hasRC }, 'Assistant messages missing reasoning_content for DeepSeek');
     }
-  }
-
-  // Force Reasoning: se il modello non supporta thinking nativo, 
-  // converte i thinking block in <reasoning_content> e inietta un prompt
-  const forceReasoningModels: string[] = []; // Configurable: es. ['qwen', 'minimax']
-  const needsForceReasoning = forceReasoningModels.some(m =>
-    resolution.targetModel.toLowerCase().includes(m)
-  );
-  if (needsForceReasoning) {
-    const messages = (providerBody as any).messages || [];
-    // Wrap assistant thinking content in reasoning tags
-    for (const msg of messages) {
-      if (msg.role === 'assistant' && msg.content) {
-        if (typeof msg.content === 'string' && msg.content.includes('<thinking>')) {
-          msg.content = msg.content.replace(/<thinking>([\s\S]*?)<\/thinking>/g, '<reasoning_content>$1</reasoning_content>');
-        }
-      }
-    }
-    // Inject reasoning prompt in last user message
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg && lastMsg.role === 'user') {
-      const prompt = '\n\nBefore answering, reason step-by-step inside <reasoning_content> tags. Then provide your final answer.';
-      if (typeof lastMsg.content === 'string') {
-        lastMsg.content += prompt;
-      } else if (Array.isArray(lastMsg.content)) {
-        lastMsg.content.push({ type: 'text', text: prompt });
-      }
-    }
-    reqLog.info({ model: resolution.targetModel }, 'Force reasoning enabled');
   }
 
   // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
@@ -264,49 +423,7 @@ export async function handleProxyRequest(
     }
   }
 
-  // 6. Make upstream request with retry (D-66 to D-69)
-  const wantsStream = body.stream === true;
-  (res as any)._wantsStream = wantsStream;
-  let retryAttempt = 0;
-
-  const upstreamStart = Date.now();
-
   try {
-    const upstreamResponse = await fetchWithRetry(
-      resolution.provider.name,
-      async (attemptNumber) => {
-        retryAttempt = attemptNumber;
-        const controller = new AbortController();
-        const timeoutMs = wantsStream
-          ? adapter.timeouts.streaming
-          : adapter.timeouts.nonStreaming;
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-        const response = await upstreamFetch(
-          `${resolution.provider.baseUrl}${adapter.apiPath}`,
-          {
-            method: 'POST',
-            headers: adapter.buildHeaders(apiKey, {
-              streaming: wantsStream,
-              requestId: req.requestId,
-            }),
-            body: JSON.stringify(providerBody),
-            signal: controller.signal,
-          },
-        );
-
-        clearTimeout(timeout);
-        return response;
-      },
-    );
-
-    (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
-
-    // Signal retry count to request logger (D-69)
-    if (retryAttempt > 0) {
-      (req as any)._retryAttempt = retryAttempt;
-    }
-
     // 7b. Decide if thinking was requested by Claude Code (high-effort mode)
     // This controls whether adapters emit native thinking_delta events or convert to text
     const thinkingEnabled = (body as any).thinking?.type === 'enabled';
@@ -334,6 +451,7 @@ export async function handleProxyRequest(
       const streamStart = Date.now();
       let outputTokens = 0;
       let streamedText = '';
+      let deadlineExceeded = false;
 
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
@@ -344,6 +462,7 @@ export async function handleProxyRequest(
         // Global streaming deadline — prevents hanging on endless reasoning
         if (Date.now() - streamStart > STREAM_DEADLINE) {
           reqLog.warn({ deadlineMs: STREAM_DEADLINE }, 'Streaming deadline exceeded, truncating');
+          deadlineExceeded = true;
           break;
         }
 
@@ -392,6 +511,15 @@ export async function handleProxyRequest(
         }
       }
       if (buf.length > 0) res.write(buf.join(''));
+      if (deadlineExceeded) {
+        emitSSEEvent(res, 'message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: 'max_tokens', stop_sequence: null },
+          usage: { output_tokens: outputTokens || 1 },
+        });
+        emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
+        markUpstreamError(req);
+      }
       res.end();
       if (outputTokens === 0 && streamedText) {
         outputTokens = estimateOutputTokens(streamedText);
@@ -444,11 +572,17 @@ export async function handleProxyRequest(
       }
       if (toolUseId) {
         const parsedInput = parseToolArguments(toolUseInput || '{}');
+        let toolInput: Record<string, unknown> = {};
+        try {
+          toolInput = JSON.parse(parsedInput) as Record<string, unknown>;
+        } catch {
+          reqLog.warn({ parsedInput }, 'Malformed tool_use JSON from upstream');
+        }
         content.push({
           type: 'tool_use',
           id: toolUseId,
           name: toolUseName,
-          input: JSON.parse(parsedInput),
+          input: toolInput,
         });
       }
 
@@ -474,62 +608,7 @@ export async function handleProxyRequest(
       updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor, currentSessionId);
     }
   } catch (error) {
-    (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
-    // return a valid text response with the error message.
-    // This way Claude Code always gets a parsable response.
-    const errMsg = getUserFacingErrorMessage(error);
-    const isStream = (res as any)._wantsStream;
-
-    if (isStream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      emitSSEEvent(res, 'message_start', {
-        type: 'message_start',
-        message: {
-          id: `msg_${crypto.randomUUID()}`,
-          type: 'message',
-          role: 'assistant',
-          content: [],
-          model: body.model,
-          stop_reason: null,
-          stop_sequence: null,
-          usage: { input_tokens: 0, output_tokens: 1 },
-        },
-      });
-      emitSSEEvent(res, 'content_block_start', {
-        type: 'content_block_start',
-        index: 0,
-        content_block: { type: 'text', text: '' },
-      });
-      emitSSEEvent(res, 'content_block_delta', {
-        type: 'content_block_delta',
-        index: 0,
-        delta: { type: 'text_delta', text: errMsg },
-      });
-      emitSSEEvent(res, 'content_block_stop', {
-        type: 'content_block_stop',
-        index: 0,
-      });
-      emitSSEEvent(res, 'message_delta', {
-        type: 'message_delta',
-        delta: { stop_reason: 'end_turn', stop_sequence: null },
-        usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
-      });
-      emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
-      res.end();
-    } else {
-      res.setHeader('Content-Type', 'application/json');
-      res.json({
-        id: `msg_${crypto.randomUUID()}`,
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'text', text: errMsg }],
-        model: body.model,
-        stop_reason: 'end_turn',
-        stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: estimateOutputTokens(errMsg) },
-      });
-    }
+    return handleUpstreamFailure(res, body, error, req.requestId, req);
   }
 }
 

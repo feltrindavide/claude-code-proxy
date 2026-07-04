@@ -66,6 +66,15 @@ export function attachLogWebSocket(server: Server): void {
       }
     });
 
+    if (!authed) {
+      const authTimeout = setTimeout(() => {
+        if (!authed && ws.readyState === WebSocket.OPEN) {
+          ws.close(4401, 'Auth timeout');
+        }
+      }, 5000);
+      ws.on('close', () => clearTimeout(authTimeout));
+    }
+
     ws.on('close', () => clients.delete(ws));
   });
 }

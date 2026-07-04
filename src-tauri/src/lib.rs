@@ -1,11 +1,15 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::{
-    ActivationPolicy, Manager,
+    Manager,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_autostart::ManagerExt as AutoStart;
+
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 
 /// Global state to track the proxy child process PID
 struct ProxyState {
@@ -16,10 +20,117 @@ impl Drop for ProxyState {
     fn drop(&mut self) {
         if let Ok(mut pid_lock) = self.pid.lock() {
             if let Some(pid) = pid_lock.take() {
-                let _ = Command::new("kill").arg(pid.to_string()).output();
+                let _ = kill_process(pid);
             }
         }
     }
+}
+
+fn kill_process(pid: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        Command::new("kill").arg(pid.to_string()).output().map(|_| ())
+    }
+    #[cfg(not(unix))]
+    {
+        Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()
+            .map(|_| ())
+    }
+}
+
+fn kill_port(port: u16) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("sh")
+            .args([
+                "-c",
+                &format!(
+                    "lsof -ti :{port} 2>/dev/null | xargs kill -9 2>/dev/null"
+                ),
+            ])
+            .output();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("sh")
+            .args([
+                "-c",
+                &format!(
+                    "fuser -k {port}/tcp 2>/dev/null || lsof -ti :{port} 2>/dev/null | xargs -r kill -9 2>/dev/null"
+                ),
+            ])
+            .output();
+    }
+}
+
+fn open_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg(url).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("xdg-open").arg(url).spawn();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = url;
+    }
+}
+
+fn find_node_binary() -> Option<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(entries) = std::fs::read_dir(format!("{}/.nvm/versions/node", home)) {
+            let mut versions: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .collect();
+            versions.sort_by_key(|e| e.file_name());
+            if let Some(latest) = versions.last() {
+                let node = latest.path().join("bin/node");
+                if node.exists() {
+                    return Some(node);
+                }
+            }
+        }
+
+        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for candidate in ["/usr/bin/node", "/usr/local/bin/node"] {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        if let Ok(output) = Command::new("sh")
+            .args(["-c", "command -v node"])
+            .output()
+        {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                let p = PathBuf::from(&path);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Start the Express proxy server
@@ -28,74 +139,41 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
     let mut pid_lock = state.pid.lock().map_err(|e| e.to_string())?;
 
     if let Some(existing_pid) = *pid_lock {
-        let _ = Command::new("kill").arg(existing_pid.to_string()).output();
+        let _ = kill_process(existing_pid);
         *pid_lock = None;
     }
 
-    // Try bundled proxy (production)
-    let resource_dir = app.path().resource_dir()
+    let resource_dir = app
+        .path()
+        .resource_dir()
         .map_err(|_| "Cannot find resource directory".to_string())?;
     let bundled = resource_dir.join("proxy-bundle/dist/index.cjs");
 
     if bundled.exists() {
-        // Kill any existing process on port 3456
-        let _ = Command::new("sh")
-            .args(["-c", "lsof -ti :3456 2>/dev/null | xargs kill -9 2>/dev/null"])
-            .output();
+        kill_port(3456);
 
-        // Find Node.js binary
-        let home = std::env::var("HOME").unwrap_or_default();
+        let node = find_node_binary().ok_or_else(|| {
+            "Node.js not found. Install Node.js (nvm, homebrew, or system package).".to_string()
+        })?;
 
-        // 1) Try nvm-installed node (latest version)
-        let node = std::fs::read_dir(format!("{}/.nvm/versions/node", home))
-            .ok().and_then(|entries| {
-                let mut versions: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir())
-                    .collect();
-                versions.sort_by_key(|e| e.file_name());
-                versions.last()
-                    .map(|e| e.path().join("bin/node"))
-            })
-            .filter(|p| p.exists())
-            // 2) Fall back to Homebrew (Apple Silicon)
-            .or_else(|| {
-                let p = std::path::PathBuf::from("/opt/homebrew/bin/node");
-                if p.exists() { Some(p) } else { None }
-            })
-            // 3) Fall back to Homebrew (Intel)
-            .or_else(|| {
-                let p = std::path::PathBuf::from("/usr/local/bin/node");
-                if p.exists() { Some(p) } else { None }
-            });
-
-        let node = match node {
-            Some(n) => n,
-            None => return Err("Node.js not found. Make sure Node.js is installed (via nvm, homebrew, or globally).".to_string()),
-        };
-
-        // Use absolute path for the bundled script (avoid cd / relative path issues)
         let proxy_bundle = resource_dir.join("proxy-bundle");
         let bundled_abs = bundled.to_string_lossy().to_string();
+        let home = std::env::var("HOME").unwrap_or_default();
 
         let mut cmd = Command::new(node.to_string_lossy().as_ref());
         cmd.arg(&bundled_abs);
         cmd.env("NODE_ENV", "production");
         cmd.current_dir(&proxy_bundle);
-        // Capture stderr for debugging
         cmd.stderr(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::null());
 
-        // Write PID to file for external tracking
         let pid_dir = format!("{}/.claude/claude-code-proxy", home);
         let _ = std::fs::create_dir_all(&pid_dir);
 
         match cmd.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
-                // Write PID to file
                 let _ = std::fs::write(format!("{}/proxy.pid", pid_dir), pid.to_string());
-                // Log stderr in background
                 if let Some(stderr) = child.stderr.take() {
                     std::thread::spawn(move || {
                         use std::io::Read;
@@ -109,11 +187,15 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
                 *pid_lock = Some(pid);
                 return Ok(pid);
             }
-            Err(e) => return Err(format!("Failed to start proxy: {}. Make sure Node.js is installed.", e)),
+            Err(e) => {
+                return Err(format!(
+                    "Failed to start proxy: {}. Make sure Node.js is installed.",
+                    e
+                ));
+            }
         }
     }
 
-    // Try project directory (dev mode)
     let cwd = std::env::current_dir().ok();
     if let Some(cwd) = cwd {
         let dev_src = cwd.join("packages/proxy/src/index.ts");
@@ -137,6 +219,85 @@ fn spawn_proxy(app: &tauri::AppHandle) -> Result<u32, String> {
 }
 
 #[tauri::command]
+fn get_admin_token() -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = format!("{}/.claude/claude-code-proxy/data/admin.token", home);
+    std::fs::read_to_string(&path)
+        .map(|s| s.trim().to_string())
+        .map_err(|e| e.to_string())
+}
+
+fn notify_desktop(title: &str, message: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{}\" with title \"{}\"",
+            message.replace('"', "\\\""),
+            title.replace('"', "\\\"")
+        );
+        let _ = Command::new("osascript").args(["-e", &script]).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("notify-send").args([title, message]).spawn();
+    }
+}
+
+fn read_admin_token_for_monitor() -> String {
+    get_admin_token().unwrap_or_default()
+}
+
+fn spawn_circuit_breaker_monitor(port: u16) {
+    std::thread::spawn(move || {
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let mut notified: std::collections::HashSet<String> = std::collections::HashSet::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            let url = format!("http://127.0.0.1:{}/admin/circuit-breakers", port);
+            let token = read_admin_token_for_monitor();
+            if token.is_empty() {
+                continue;
+            }
+            let Ok(resp) = client
+                .get(&url)
+                .header("X-Admin-Token", token)
+                .send()
+            else {
+                continue;
+            };
+            if !resp.status().is_success() {
+                continue;
+            }
+            let Ok(body) = resp.json::<serde_json::Value>() else {
+                continue;
+            };
+            if let Some(arr) = body.get("circuitBreakers").and_then(|v| v.as_array()) {
+                for item in arr {
+                    let provider = item.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                    let state = item.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                    if state == "open" && !provider.is_empty() && !notified.contains(provider) {
+                        notified.insert(provider.to_string());
+                        notify_desktop(
+                            "ClaudeCode Proxy",
+                            &format!("Circuit breaker open for provider {}", provider),
+                        );
+                    }
+                    if state == "closed" {
+                        notified.remove(provider);
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[tauri::command]
 async fn start_proxy(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let pid = spawn_proxy(&app)?;
     Ok(serde_json::json!({
@@ -146,14 +307,13 @@ async fn start_proxy(app: tauri::AppHandle) -> Result<serde_json::Value, String>
     }))
 }
 
-/// Stop the Express proxy server
 #[tauri::command]
 async fn stop_proxy(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<ProxyState>();
     let mut pid_lock = state.pid.lock().map_err(|e| e.to_string())?;
 
     if let Some(pid) = pid_lock.take() {
-        let _ = Command::new("kill").arg(pid.to_string()).output();
+        let _ = kill_process(pid);
         Ok(serde_json::json!({
             "success": true,
             "message": "Proxy stopped"
@@ -166,7 +326,6 @@ async fn stop_proxy(app: tauri::AppHandle) -> Result<serde_json::Value, String> 
     }
 }
 
-/// Get the current proxy status by polling the health endpoint
 #[tauri::command]
 async fn get_proxy_status() -> Result<serde_json::Value, String> {
     let client = reqwest::blocking::Client::builder()
@@ -181,6 +340,7 @@ async fn get_proxy_status() -> Result<serde_json::Value, String> {
                 "running": true,
                 "status": body.get("status").and_then(|s| s.as_str()).unwrap_or("unknown"),
                 "port": body.get("port").and_then(|p| p.as_u64()).unwrap_or(3456),
+                "host": body.get("host").and_then(|h| h.as_str()).unwrap_or("127.0.0.1"),
                 "version": body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown")
             }))
         }
@@ -188,17 +348,21 @@ async fn get_proxy_status() -> Result<serde_json::Value, String> {
             "running": false,
             "status": "stopped",
             "port": 3456,
+            "host": "127.0.0.1",
             "version": null
-        }))
+        })),
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec![])))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .manage(ProxyState {
             pid: Mutex::new(None),
         })
@@ -206,30 +370,30 @@ pub fn run() {
             start_proxy,
             stop_proxy,
             get_proxy_status,
-        ])
+            get_admin_token,
+        ]);
+
+    builder
         .setup(|app| {
-            // Hide from dock (menu bar app style)
+            #[cfg(target_os = "macos")]
             app.set_activation_policy(ActivationPolicy::Accessory);
 
-            // Auto-start proxy on launch
             let handle = app.handle().clone();
             if let Err(e) = spawn_proxy(&handle) {
                 eprintln!("[Proxy] Failed to start proxy: {}", e);
             } else {
                 println!("[Proxy] Proxy started on port 3456");
+                spawn_circuit_breaker_monitor(3456);
             }
 
-            // Enable autostart on first launch
             let autostart = handle.autolaunch();
             let _ = autostart.enable();
 
-            // Build tray menu
-            let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>).unwrap();
+            let dashboard =
+                MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>).unwrap();
             let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q")).unwrap();
             let menu = Menu::with_items(app, &[&dashboard, &quit]).unwrap();
 
-            // Build tray icon with menu
-            let handle = app.handle().clone();
             let handle_menu = handle.clone();
             let handle_tray = handle.clone();
             TrayIconBuilder::new()
@@ -239,16 +403,12 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |_app, event| {
                     match event.id().as_ref() {
-                        "dashboard" => {
-                            let _ = std::process::Command::new("open")
-                                .arg("http://localhost:3456")
-                                .spawn();
-                        }
+                        "dashboard" => open_url("http://localhost:3457"),
                         "quit" => {
                             let state = handle_menu.state::<ProxyState>();
                             if let Ok(mut pid_lock) = state.pid.lock() {
                                 if let Some(pid) = pid_lock.take() {
-                                    let _ = Command::new("kill").arg(pid.to_string()).output();
+                                    let _ = kill_process(pid);
                                 }
                             }
                             std::process::exit(0);
@@ -287,10 +447,7 @@ fn toggle_window(app: &tauri::AppHandle, _tray: &tauri::tray::TrayIcon) {
         } else {
             let cursor_pos = window.cursor_position().ok();
             let popup_pos = match cursor_pos {
-                Some(c) => tauri::PhysicalPosition::new(
-                    (c.x as i32 - 160).max(10),
-                    30,
-                ),
+                Some(c) => tauri::PhysicalPosition::new((c.x as i32 - 160).max(10), 30),
                 None => tauri::PhysicalPosition::new(100, 30),
             };
             let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(350, 330)));

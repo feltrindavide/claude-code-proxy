@@ -2,6 +2,7 @@
 name: proxy-context
 description: "Shows Claude Code Proxy provider context usage — which model was used last, token consumption, and context window fill. Use when asked about proxy model, provider routing, or token inflation."
 trigger: /proxy-context
+proxy-version: 0.0.0
 ---
 
 # /proxy-context
@@ -36,3 +37,4 @@ Then show the result as a table with:
 - Shows the **last request** usage (not real-time accumulation)
 - Token counts are estimates (chars/4)
 - Output tokens may be inflated by proxy's token inflation system
+- Skill auto-updates when the proxy app version changes (`proxy-version` in frontmatter)

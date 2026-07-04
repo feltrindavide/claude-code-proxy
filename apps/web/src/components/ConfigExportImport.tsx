@@ -1,6 +1,6 @@
 'use client';
-import { useState, useRef } from 'react';
-import { exportConfig, importConfig, fetchDiff } from '@/lib/api';
+import { useState, useRef, useEffect } from 'react';
+import { exportConfig, importConfig, fetchDiff, fetchConfigAudit, rollbackConfig, type ConfigAuditEntry } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import { Modal } from '@/components/Modal';
 import { JsonDiffViewer } from '@/components/JsonDiffViewer';
@@ -16,6 +16,13 @@ export function ConfigExportImport() {
   const [diffData, setDiffData] = useState<{ current: object; incoming: object } | null>(null);
   const [pendingImport, setPendingImport] = useState<object | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [auditEntries, setAuditEntries] = useState<ConfigAuditEntry[]>([]);
+
+  useEffect(() => {
+    void fetchConfigAudit()
+      .then((data) => setAuditEntries(data.entries))
+      .catch(() => setAuditEntries([]));
+  }, []);
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -79,6 +86,17 @@ export function ConfigExportImport() {
     }
   };
 
+  async function handleRollback(id: string) {
+    try {
+      await rollbackConfig(id);
+      toast('Configuration rolled back', 'success');
+      const data = await fetchConfigAudit();
+      setAuditEntries(data.entries);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Rollback failed', 'error');
+    }
+  }
+
   return (
     <div className="bg-surface-card rounded-lg border border-hairline p-lg">
       <h2 className="font-display text-[22px] text-ink mb-lg">Configuration</h2>
@@ -118,6 +136,28 @@ export function ConfigExportImport() {
         <p className="text-small text-muted mt-xs">Import a configuration file. You&apos;ll see a diff preview before changes are applied.</p>
         {importError && (
           <p className="text-small text-semantic-error mt-xs">{importError}</p>
+        )}
+      </div>
+
+      <div className="mt-lg border-t border-hairline pt-lg">
+        <h3 className="font-heading text-[16px] text-ink mb-sm">Config history</h3>
+        <p className="text-small text-muted mb-md">One-click rollback to a previous snapshot.</p>
+        {auditEntries.length === 0 ? (
+          <p className="text-small text-muted">No audit entries yet.</p>
+        ) : (
+          <ul className="space-y-2 max-h-48 overflow-auto">
+            {auditEntries.slice(0, 10).map((entry) => (
+              <li key={entry.id} className="flex items-center justify-between gap-2 text-sm">
+                <span className="font-mono text-xs truncate">
+                  {new Date(entry.timestamp).toLocaleString()} — {entry.action}
+                  {entry.summary ? ` (${entry.summary})` : ''}
+                </span>
+                <Button variant="secondary" onClick={() => void handleRollback(entry.id)}>
+                  Rollback
+                </Button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 

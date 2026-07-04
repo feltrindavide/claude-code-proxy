@@ -1,53 +1,47 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-
-interface ModelEntry {
-  id: string;
-  provider: string;
-  context: number;
-  max_output: number;
-}
+import {
+  fetchConfig,
+  fetchContextConfig,
+  saveContextConfig,
+  type ContextModelEntry,
+} from '@/lib/api';
 
 export function ContextEditor() {
   const { toast } = useToast();
-  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [models, setModels] = useState<ContextModelEntry[]>([]);
   const [claudeTiers, setClaudeTiers] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, []);
 
   async function loadData() {
     try {
-      const [ctxResp, configResp] = await Promise.all([
-        fetch('http://localhost:3456/admin/context'),
-        fetch('http://localhost:3456/config'),
+      const [ctx, configData] = await Promise.all([
+        fetchContextConfig(),
+        fetchConfig(),
       ]);
-      const ctx = await ctxResp.json();
-      const configData = await configResp.json();
 
-      // Prende i modelli SOLO da config.json (quelli che l'utente ha aggiunto)
       const knownModels = new Set<string>();
-      for (const p of (configData.providers || [])) {
+      for (const p of configData.providers || []) {
         if (!p.models) continue;
         for (const mId of p.models) {
           knownModels.add(`${p.name}:${mId}`);
         }
       }
 
-      // Filtra solo modelli presenti nella config utente
       const filtered = (ctx.config.models || []).filter(
-        (m: ModelEntry) => knownModels.has(`${m.provider}:${m.id}`)
+        (m) => knownModels.has(`${m.provider}:${m.id}`),
       );
       setModels(filtered);
-
-      // Tier Claude
       setClaudeTiers(ctx.config.claude || {});
     } catch {
       toast('Failed to load context', 'error');
@@ -69,7 +63,7 @@ export function ContextEditor() {
   function updateClaude(tier: string, value: string) {
     const parsed = parseInt(value, 10);
     if (!isNaN(parsed) && parsed > 0) {
-      setClaudeTiers(prev => ({ ...prev, [tier]: parsed }));
+      setClaudeTiers((prev) => ({ ...prev, [tier]: parsed }));
       setDirty(true);
     }
   }
@@ -77,23 +71,18 @@ export function ContextEditor() {
   async function handleSave() {
     setSaving(true);
     try {
-      await fetch('http://localhost:3456/admin/context', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models, claude: claudeTiers }),
-      });
+      await saveContextConfig({ models, claude: claudeTiers });
       setDirty(false);
       toast('Context settings saved', 'success');
-    } catch {
-      toast('Failed to save context settings', 'error');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to save context settings', 'error');
     } finally {
       setSaving(false);
     }
   }
 
-  // Raggruppa modelli per provider
   const groupedModels = useMemo(() => {
-    const groups: Record<string, ModelEntry[]> = {};
+    const groups: Record<string, ContextModelEntry[]> = {};
     for (const m of models) {
       if (!groups[m.provider]) groups[m.provider] = [];
       groups[m.provider].push(m);
@@ -107,8 +96,6 @@ export function ContextEditor() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-lg">
-
-      {/* Claude official tiers */}
       <Card title="Claude Official (reference)">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -119,7 +106,7 @@ export function ContextEditor() {
               </tr>
             </thead>
             <tbody>
-              {['opus', 'sonnet', 'haiku'].map(tier => (
+              {['opus', 'sonnet', 'haiku'].map((tier) => (
                 <tr key={tier} className="border-b border-hairline last:border-b-0">
                   <td className="py-3 pr-4">
                     <span className="font-mono text-sm text-ink capitalize">{tier}</span>
@@ -141,7 +128,6 @@ export function ContextEditor() {
         </div>
       </Card>
 
-      {/* Mapped models from Model Library, raggruppati per provider */}
       <Card title="Model Library Context">
         {models.length === 0 ? (
           <p className="text-body py-6 text-center">No models in library. Go to Models page first.</p>
@@ -149,11 +135,9 @@ export function ContextEditor() {
           <div className="space-y-6">
             {Object.entries(groupedModels).map(([provider, providerModels]) => (
               <div key={provider}>
-                {/* Provider header */}
                 <h3 className="text-sm font-semibold text-muted uppercase tracking-wider mb-2">
                   {provider}
                 </h3>
-
                 <div className="overflow-x-auto">
                   <table className="w-full text-left">
                     <thead>
@@ -164,10 +148,9 @@ export function ContextEditor() {
                       </tr>
                     </thead>
                     <tbody>
-                      {providerModels.map((m, i) => {
-                        // Trova indice globale per updateModel
+                      {providerModels.map((m) => {
                         const globalIdx = models.findIndex(
-                          (mm) => mm.provider === m.provider && mm.id === m.id
+                          (mm) => mm.provider === m.provider && mm.id === m.id,
                         );
                         return (
                           <tr

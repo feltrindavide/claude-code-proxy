@@ -153,4 +153,29 @@ describe('ProviderService', () => {
       expect(provider).toBeUndefined();
     });
   });
+
+  describe('reload', () => {
+    it('atomically replaces providers and routes', () => {
+      const newProviders: LLMProvider[] = [
+        {
+          name: 'new-provider',
+          baseUrl: 'https://new.com/v1',
+          keyId: 'key',
+          models: ['model-a'],
+          enabled: true,
+          priority: 1,
+        },
+      ];
+      const newRoutes: ModelRoute[] = [
+        { claudeTier: 'opus', providerName: 'new-provider', targetModel: 'model-a' },
+      ];
+
+      providerService.reload(newProviders, newRoutes);
+
+      expect(providerService.getProvider('opencode')).toBeUndefined();
+      expect(providerService.getProvider('new-provider')?.name).toBe('new-provider');
+      const resolution = providerService.resolveModelRoute('claude-opus-4-20250514');
+      expect(resolution?.targetModel).toBe('model-a');
+    });
+  });
 });

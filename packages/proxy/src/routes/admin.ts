@@ -31,7 +31,28 @@ import { lastContextUsage, getCurrentSessionUsage } from '../proxy.js';
 import { getDiscoveryService } from '../services/discovery-registry.js';
 import { checkProviderHealth } from '../services/provider-health.js';
 import { getMetricsText } from '../metrics/prometheus.js';
+import { getMetricsSummary } from '../services/metrics-summary.js';
+import { listConfigAudit, loadConfigSnapshot, recordConfigAudit } from '../services/config-audit.js';
+import { circuitBreakerService } from '../services/circuit-breaker.js';
+import { resolveBindHost, resolvePort } from '../services/network.js';
+import { latencyTracker } from '../services/latency-tracker.js';
+import { runModelBenchmark } from '../services/model-benchmark.js';
+import { importOpenRouterCatalog } from '../services/openrouter-import.js';
+import { subscribeContextStream } from '../services/context-broadcast.js';
+import { reloadRuntimeConfig } from '../services/runtime-config.js';
+import {
+  getAdminMtlsStatus,
+  adminMtlsCertsReady,
+  getAdminMtlsDir,
+} from '../services/admin-mtls.js';
 import { logger } from '../lib/logger.js';
+import fs from 'fs';
+import path from 'path';
+import {
+  resolvePluginPaths,
+  syncSkillFile,
+  syncScriptFile,
+} from '../services/plugin-installer.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -68,6 +89,19 @@ const routeSchema = z.object({
 // Rate limit validation schema (T-05-03: enforces 1-1000 RPM range)
 const rateLimitSchema = z.object({
   requestsPerMinute: z.number().int().min(1).max(1000),
+});
+
+const routeExperimentSchema = z.object({
+  id: z.string().min(1).max(50),
+  tier: z.enum(['opus', 'sonnet', 'haiku']),
+  enabled: z.boolean(),
+  variants: z.array(z.object({
+    name: z.string().min(1).max(50),
+    weight: z.number().min(0).max(100),
+    providerName: z.string().min(1),
+    targetModel: z.string().min(1),
+  })).min(1),
+  stickyKey: z.enum(['session', 'user']).optional(),
 });
 
 /**
@@ -231,6 +265,35 @@ router.post('/providers', async (req, res) => {
 });
 
 /**
+ * PATCH /admin/providers/:id/models — update model list without touching API key
+ */
+router.patch('/providers/:id/models', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { models } = req.body as { models?: unknown };
+    if (!Array.isArray(models)) {
+      return res.status(400).json({ error: 'models must be an array' });
+    }
+
+    const config = configService.load();
+    const provider = config.providers.find((p) => p.name === id);
+    if (!provider) {
+      return res.status(404).json({ error: 'Provider not found' });
+    }
+
+    provider.models = models as string[];
+    configService.save(config);
+    providerService.reload(config.providers, config.routes);
+    contextRegistry.syncFromConfig(config.providers);
+
+    res.json({ success: true, models: provider.models });
+  } catch (error) {
+    console.error('[Admin] Error patching provider models:', error);
+    res.status(500).json({ error: 'Failed to update models' });
+  }
+});
+
+/**
  * DELETE /admin/providers/:id
  * Remove provider and its Keychain entry
  */
@@ -378,12 +441,21 @@ router.put('/routes', (req, res) => {
   try {
     const { routes, subagentModel } = req.body;
     
-    // Validate routes
     if (!Array.isArray(routes)) {
       return res.status(400).json({ error: 'routes must be an array' });
     }
+
+    for (const route of routes) {
+      const validation = configService.validateRoute(route);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error || 'Invalid route' });
+      }
+      const r = route as { providerName?: string; targetModel?: string };
+      if (!r.providerName?.trim() || !r.targetModel?.trim()) {
+        return res.status(400).json({ error: 'providerName and targetModel are required for each route' });
+      }
+    }
     
-    // Update provider service
     providerService.setRoutes(routes);
     
     // Also update config
@@ -461,7 +533,10 @@ router.post('/config/import', (req, res) => {
 router.get('/auto-compact', (req, res) => {
   try {
     const config = configService.load();
-    res.json({ threshold: config.autoCompactThreshold ?? 0.7 });
+    res.json({
+      threshold: config.autoCompactThreshold ?? 0.7,
+      mode: config.autoCompactMode ?? 'suggest',
+    });
   } catch (error) {
     console.error('[Admin] Error loading auto-compact threshold:', error);
     res.status(500).json({ error: 'Failed to load threshold' });
@@ -470,18 +545,63 @@ router.get('/auto-compact', (req, res) => {
 
 router.put('/auto-compact', (req, res) => {
   try {
-    const threshold = parseFloat(req.body.threshold);
-    if (isNaN(threshold) || threshold < 0 || threshold > 1) {
+    const threshold = req.body.threshold !== undefined
+      ? parseFloat(req.body.threshold)
+      : undefined;
+    const mode = req.body.mode;
+
+    if (threshold !== undefined && (isNaN(threshold) || threshold < 0 || threshold > 1)) {
       return res.status(400).json({ error: 'threshold must be a number between 0 and 1' });
     }
+    if (mode !== undefined && mode !== 'suggest' && mode !== 'trigger') {
+      return res.status(400).json({ error: 'mode must be suggest or trigger' });
+    }
+
     const config = configService.load();
-    config.autoCompactThreshold = threshold;
+    if (threshold !== undefined) config.autoCompactThreshold = threshold;
+    if (mode !== undefined) config.autoCompactMode = mode;
     configService.save(config);
-    res.json({ success: true, threshold });
+    res.json({
+      success: true,
+      threshold: config.autoCompactThreshold ?? 0.7,
+      mode: config.autoCompactMode ?? 'suggest',
+    });
   } catch (error) {
     console.error('[Admin] Error saving auto-compact threshold:', error);
     res.status(500).json({ error: 'Failed to save threshold' });
   }
+});
+
+const aliasSchema = z.record(z.string());
+
+/**
+ * GET /admin/aliases — user-friendly model aliases
+ */
+router.get('/aliases', (_req, res) => {
+  const config = configService.load();
+  res.json({ aliases: config.aliases ?? {} });
+});
+
+/**
+ * PUT /admin/aliases — update model aliases (fast, smart, free, custom)
+ */
+router.put('/aliases', expressJson(), (req, res) => {
+  const parsed = aliasSchema.safeParse(req.body.aliases ?? req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors });
+  }
+
+  const aliases: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed.data)) {
+    if (typeof value === 'string' && value.trim()) {
+      aliases[key] = value.trim();
+    }
+  }
+
+  const config = configService.load();
+  config.aliases = aliases;
+  configService.save(config);
+  res.json({ success: true, aliases });
 });
 
 /**
@@ -736,6 +856,420 @@ router.post('/discovery/scan', async (_req, res) => {
   if (!discovery) return res.status(503).json({ error: 'Discovery not initialized' });
   await discovery.scan();
   res.json({ success: true, providers: discovery.getDiscoveredProviders() });
+});
+
+/**
+ * GET /admin/routing-stats — latency p50/p95 per provider/model
+ */
+router.get('/routing-stats', (_req, res) => {
+  res.json({
+    latency: latencyTracker.getAllStats(),
+    routes: providerService.getRoutes(),
+  });
+});
+
+/**
+ * GET /admin/onboarding — first-run wizard status
+ */
+router.get('/onboarding', (_req, res) => {
+  const config = configService.load();
+  res.json({
+    complete: config.onboardingComplete === true,
+    hasProviders: config.providers.length > 0,
+    hasRoutes: config.routes.some((r) => r.providerName && r.targetModel),
+  });
+});
+
+/**
+ * POST /admin/onboarding/complete — mark wizard done
+ */
+router.post('/onboarding/complete', (_req, res) => {
+  const config = configService.load();
+  config.onboardingComplete = true;
+  configService.save(config);
+  res.json({ success: true });
+});
+
+const benchmarkSchema = z.object({
+  providerName: z.string().min(1),
+  targetModel: z.string().min(1),
+  tier: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+});
+
+/**
+ * POST /admin/benchmark — run standard probe against a model
+ */
+router.post('/benchmark', expressJson(), async (req, res) => {
+  const parsed = benchmarkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors });
+  }
+  try {
+    const result = await runModelBenchmark(parsed.data);
+    res.json(result);
+  } catch (error) {
+    logger.error({ err: error }, 'Benchmark failed');
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Benchmark failed',
+    });
+  }
+});
+
+const importOpenRouterSchema = z.object({
+  filter: z.enum(['all', 'free', 'paid']).optional(),
+});
+
+/**
+ * POST /admin/providers/:id/import-openrouter — merge OpenRouter catalog
+ */
+router.post('/providers/:id/import-openrouter', expressJson(), async (req, res) => {
+  const { id } = req.params;
+  const parsed = importOpenRouterSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors });
+  }
+  try {
+    const result = await importOpenRouterCatalog(id, parsed.data.filter ?? 'all');
+    reloadRuntimeConfig();
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(400).json({
+      error: error instanceof Error ? error.message : 'Import failed',
+    });
+  }
+});
+
+/**
+ * GET /admin/context/stream — SSE live context gauge
+ */
+router.get('/context/stream', (req, res) => {
+  const sessionId = typeof req.query.session === 'string' ? req.query.session : undefined;
+  subscribeContextStream(res, sessionId);
+});
+
+const networkSchema = z.object({
+  host: z.string().min(1).max(253).optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+});
+
+/**
+ * GET /admin/network — bind address policy and persisted settings
+ */
+router.get('/network', (_req, res) => {
+  const config = configService.load();
+  res.json({
+    host: resolveBindHost(config.host),
+    requestedHost: config.host ?? '127.0.0.1',
+    port: resolvePort(config.port),
+    lanBindAllowed: process.env.ALLOW_LAN_BIND === 'true',
+  });
+});
+
+/**
+ * PUT /admin/network — persist host/port (restart required to apply)
+ */
+router.put('/network', expressJson(), (req, res) => {
+  const parsed = networkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors });
+  }
+
+  const config = configService.load();
+  if (parsed.data.host !== undefined) {
+    config.host = resolveBindHost(parsed.data.host);
+  }
+  if (parsed.data.port !== undefined) {
+    config.port = resolvePort(parsed.data.port);
+  }
+  configService.save(config);
+  reloadRuntimeConfig();
+
+  res.json({
+    success: true,
+    host: config.host,
+    port: config.port,
+    restartRequired: true,
+  });
+});
+
+const mtlsSchema = z.object({
+  enabled: z.boolean(),
+  port: z.number().int().min(1024).max(65535).optional(),
+});
+
+/**
+ * GET /admin/security/mtls — mTLS admin listener status
+ */
+router.get('/security/mtls', (_req, res) => {
+  const config = configService.load();
+  const status = getAdminMtlsStatus();
+  res.json({
+    ...status,
+    configured: config.adminMtls ?? { enabled: false, port: status.port },
+    generateScript: 'scripts/generate-admin-mtls.sh',
+    certDir: getAdminMtlsDir(),
+  });
+});
+
+/**
+ * PUT /admin/security/mtls — enable/disable mTLS admin (restart required)
+ */
+router.put('/security/mtls', expressJson(), (req, res) => {
+  const parsed = mtlsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.errors });
+  }
+
+  if (parsed.data.enabled && !adminMtlsCertsReady()) {
+    return res.status(400).json({
+      error: 'Certificates not found. Run scripts/generate-admin-mtls.sh first.',
+      certDir: getAdminMtlsDir(),
+      generateScript: 'scripts/generate-admin-mtls.sh',
+    });
+  }
+
+  const config = configService.load();
+  config.adminMtls = {
+    enabled: parsed.data.enabled,
+    port: parsed.data.port ?? config.adminMtls?.port,
+  };
+  configService.save(config);
+  reloadRuntimeConfig();
+
+  res.json({
+    success: true,
+    restartRequired: true,
+    ...getAdminMtlsStatus(),
+    configured: config.adminMtls,
+  });
+});
+
+router.put('/routing/prefs', (req, res) => {
+  try {
+    const config = configService.load();
+    config.routing = {
+      ...config.routing,
+      preferLowLatency: Boolean(req.body?.preferLowLatency),
+      preferLowCost: Boolean(req.body?.preferLowCost),
+    };
+    configService.save(config);
+    reloadRuntimeConfig();
+    res.json({ success: true, routing: config.routing });
+  } catch (error) {
+    console.error('[Admin] Error saving routing prefs:', error);
+    res.status(500).json({ error: 'Failed to save routing preferences' });
+  }
+});
+
+router.get('/profiles', (_req, res) => {
+  const config = configService.load();
+  const profiles = Object.keys((config as { profiles?: Record<string, unknown> }).profiles ?? { default: {} });
+  res.json({
+    activeProfile: (config as { activeProfile?: string }).activeProfile ?? 'default',
+    profiles: profiles.length ? profiles : ['default'],
+  });
+});
+
+router.put('/profiles/active', (req, res) => {
+  try {
+    const name = String(req.body?.name || 'default');
+    const config = configService.load();
+    if (!config.profiles) config.profiles = {};
+
+    const snapshot = config.profiles[name] as Partial<typeof config> | undefined;
+    if (!snapshot || Object.keys(snapshot).length === 0) {
+      if (!config.profiles[name]) config.profiles[name] = {};
+      config.activeProfile = name;
+      configService.save(config);
+      return res.json({ success: true, activeProfile: name, applied: false });
+    }
+
+    const merged = {
+      ...config,
+      ...snapshot,
+      profiles: config.profiles,
+      activeProfile: name,
+    };
+    configService.save(merged);
+    providerService.reload(merged.providers || [], merged.routes || []);
+    reloadRuntimeConfig();
+    res.json({ success: true, activeProfile: name, applied: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to switch profile' });
+  }
+});
+
+router.put('/profiles/:name', (req, res) => {
+  try {
+    const name = req.params.name;
+    const config = configService.load();
+    if (!config.profiles) config.profiles = {};
+
+    const { providers, routes, routing, experiments, aliases, subagentModel } = config;
+    config.profiles[name] = {
+      providers,
+      routes,
+      routing,
+      experiments,
+      aliases,
+      subagentModel,
+    };
+    config.activeProfile = name;
+    configService.save(config);
+    res.json({ success: true, profile: name });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save profile snapshot' });
+  }
+});
+
+router.put('/experiments', (req, res) => {
+  try {
+    const experiments = req.body?.experiments;
+    if (!Array.isArray(experiments)) {
+      return res.status(400).json({ error: 'experiments array required' });
+    }
+    for (const exp of experiments) {
+      const parsed = routeExperimentSchema.safeParse(exp);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.errors });
+      }
+    }
+    const config = configService.load();
+    config.experiments = experiments;
+    configService.save(config);
+    reloadRuntimeConfig();
+    res.json({ success: true, experiments: config.experiments });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to save experiments' });
+  }
+});
+
+router.get('/config/audit', (_req, res) => {
+  try {
+    res.json({ entries: listConfigAudit(50) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load config audit log' });
+  }
+});
+
+router.post('/config/rollback', (req, res) => {
+  try {
+    const id = String(req.body?.id || '');
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    const current = configService.load();
+    recordConfigAudit(current, 'pre_rollback', `Before rollback to ${id}`);
+
+    const restored = loadConfigSnapshot(id);
+    configService.save(restored);
+    providerService.reload(restored.providers || [], restored.routes || []);
+    reloadRuntimeConfig();
+    recordConfigAudit(restored, 'rollback', `Restored from audit ${id}`);
+    res.json({ success: true, id });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Rollback failed' });
+  }
+});
+
+router.get('/metrics/summary', (_req, res) => {
+  res.json(getMetricsSummary());
+});
+
+router.get('/circuit-breakers', (_req, res) => {
+  const states = [...circuitBreakerService.getAllStates()].map(([provider, state]) => ({
+    provider,
+    state,
+  }));
+  res.json({ circuitBreakers: states });
+});
+
+router.post('/replay', async (req, res) => {
+  try {
+    const replayId = req.body?.replayId as string | undefined;
+    const body = req.body?.body as unknown | undefined;
+    let requestBody: unknown;
+
+    if (replayId) {
+      requestBody = requestLogService.getReplayBody(replayId);
+    } else if (body) {
+      requestBody = body;
+    } else {
+      return res.status(400).json({ error: 'replayId or body required' });
+    }
+
+    const config = configService.load();
+    const port = resolvePort(config.port);
+    const token = process.env.PROXY_API_TOKEN;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const upstream = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+    });
+
+    const text = await upstream.text();
+    res.status(upstream.status).json({
+      success: upstream.ok,
+      statusCode: upstream.status,
+      preview: text.slice(0, 2048),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Replay failed' });
+  }
+});
+
+router.get('/providers/health', async (_req, res) => {
+  try {
+    const providers = providerService.getProviders();
+    const results = await Promise.all(providers.map((p) => checkProviderHealth(p)));
+    res.json({ providers: results });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to check provider health' });
+  }
+});
+
+router.get('/plugins', (_req, res) => {
+  const paths = resolvePluginPaths();
+  const candidates = [
+    path.join(process.cwd(), 'scripts/plugins/proxy-context/SKILL.md'),
+    path.join(process.cwd(), '../../scripts/plugins/proxy-context/SKILL.md'),
+  ];
+  const bundledSkill = candidates.find((c) => fs.existsSync(c)) ?? candidates[0];
+  res.json([
+    { id: 'proxy-context', installed: fs.existsSync(paths.skillDest), path: paths.skillDest },
+    { id: 'proxy-context-bundled', installed: fs.existsSync(bundledSkill), path: bundledSkill },
+  ]);
+});
+
+router.post('/plugins/:id/install', (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id !== 'proxy-context') {
+      return res.status(404).json({ error: 'Unknown plugin' });
+    }
+    const paths = resolvePluginPaths();
+    const candidates = [
+      path.join(process.cwd(), 'scripts/plugins/proxy-context/SKILL.md'),
+      path.join(process.cwd(), '../../scripts/plugins/proxy-context/SKILL.md'),
+    ];
+    const skillSrc = candidates.find((c) => fs.existsSync(c));
+    if (!skillSrc) {
+      return res.status(404).json({ error: 'Bundled plugin skill not found' });
+    }
+    const result = syncSkillFile(skillSrc, paths.skillDest, process.env.APP_VERSION || '1.0.0');
+    const scriptCandidates = [
+      path.join(process.cwd(), 'scripts/context-status.js'),
+      path.join(process.cwd(), '../../scripts/context-status.js'),
+    ];
+    const scriptSrc = scriptCandidates.find((c) => fs.existsSync(c));
+    if (scriptSrc) syncScriptFile(scriptSrc, paths.statusScriptDest);
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('[Admin] Plugin install failed:', error);
+    res.status(500).json({ error: 'Plugin install failed' });
+  }
 });
 
 export default router;

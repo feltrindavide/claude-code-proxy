@@ -30,6 +30,13 @@ export const proxyCacheHitsTotal = new client.Counter({
   registers: [register],
 });
 
+export const proxyExperimentRequestsTotal = new client.Counter({
+  name: 'proxy_experiment_requests_total',
+  help: 'A/B experiment request count',
+  labelNames: ['experiment', 'variant', 'tier'] as const,
+  registers: [register],
+});
+
 export const proxyCircuitBreakerState = new client.Gauge({
   name: 'proxy_circuit_breaker_state',
   help: 'Circuit breaker state (0=closed, 1=half-open, 2=open)',

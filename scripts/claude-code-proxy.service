@@ -1,0 +1,24 @@
+[Unit]
+Description=Claude Code Proxy — local LLM routing for Claude Code
+Documentation=https://github.com/feltrindavide/claude-code-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=%h/.claude/claude-code-proxy
+Environment=NODE_ENV=production
+EnvironmentFile=-%h/.claude/claude-code-proxy/env.sh
+ExecStart=/usr/bin/node %h/.local/share/claude-code-proxy/proxy-bundle/dist/index.cjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.claude
+
+[Install]
+WantedBy=default.target

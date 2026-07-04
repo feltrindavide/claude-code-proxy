@@ -32,7 +32,9 @@
     "active": true,
     "targets": [
       "dmg",
-      "app"
+      "app",
+      "deb",
+      "appimage"
     ],
     "createUpdaterArtifacts": true,
     "icon": [

@@ -1,10 +1,35 @@
-const PROXY_API_BASE = 'http://localhost:3456';
+import { getProxyHttpBase, setProxyHttpBaseFromPort } from './proxyBase';
+import type { RouteExperiment } from '@anthropic-claude-code/shared';
 
 let cachedAdminToken: string | null = null;
 
+async function tryTauriAdminToken(): Promise<string | null> {
+  try {
+    const mod = await import('@tauri-apps/api/core');
+    const token = await mod.invoke<string>('get_admin_token');
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+function formatApiError(body: { error?: unknown }): string {
+  const err = body.error;
+  if (Array.isArray(err) && err[0]?.message) return String(err[0].message);
+  if (typeof err === 'string') return err;
+  return 'Request failed';
+}
+
 export async function ensureAdminToken(): Promise<string> {
   if (cachedAdminToken) return cachedAdminToken;
-  const response = await fetch(`${PROXY_API_BASE}/admin/auth/bootstrap`, {
+
+  const tauriToken = await tryTauriAdminToken();
+  if (tauriToken) {
+    cachedAdminToken = tauriToken;
+    return cachedAdminToken;
+  }
+
+  const response = await fetch(`${getProxyHttpBase()}/admin/auth/bootstrap`, {
     signal: AbortSignal.timeout(3000),
   });
   if (!response.ok) throw new Error('Failed to bootstrap admin token');
@@ -13,11 +38,24 @@ export async function ensureAdminToken(): Promise<string> {
   return cachedAdminToken;
 }
 
+export function clearAdminTokenCache(): void {
+  cachedAdminToken = null;
+}
+
 async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await ensureAdminToken();
   const headers = new Headers(init?.headers);
   headers.set('X-Admin-Token', token);
-  return fetch(url, { ...init, headers });
+  let response = await fetch(url, { ...init, headers });
+
+  if (response.status === 401) {
+    clearAdminTokenCache();
+    const retryToken = await ensureAdminToken();
+    headers.set('X-Admin-Token', retryToken);
+    response = await fetch(url, { ...init, headers });
+  }
+
+  return response;
 }
 
 // Tauri invoke — lazy loaded only when running inside Tauri app
@@ -32,9 +70,11 @@ export async function checkHealth(): Promise<{
   status: string;
   port: number | null;
   version: string | null;
+  uptimeMs?: number | null;
+  activeStreams?: number | null;
 }> {
   try {
-    const response = await fetch(`${PROXY_API_BASE}/health`, {
+    const response = await fetch(`${getProxyHttpBase()}/health`, {
       method: 'GET',
       signal: AbortSignal.timeout(3000), // 3s timeout
     });
@@ -42,11 +82,14 @@ export async function checkHealth(): Promise<{
       return { running: false, status: 'error', port: null, version: null };
     }
     const data = await response.json();
+    setProxyHttpBaseFromPort(data.port);
     return {
       running: true,
       status: data.status || 'ok',
       port: data.port || 3456,
       version: data.version || null,
+      uptimeMs: data.uptimeMs ?? null,
+      activeStreams: data.activeStreams ?? null,
     };
   } catch {
     return { running: false, status: 'stopped', port: null, version: null };
@@ -79,7 +122,7 @@ export async function stopProxy(): Promise<{ success: boolean; error?: string }>
 
 export async function getProviderCount(): Promise<number> {
   try {
-    const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
+    const response = await adminFetch(`${getProxyHttpBase()}/admin/providers`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) return 0;
@@ -98,8 +141,10 @@ export async function fetchProviders(): Promise<Array<{
   models: string[];
   enabled: boolean;
   priority: number;
+  providerType?: string;
+  autoDiscovered?: boolean;
 }>> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch providers');
@@ -115,7 +160,7 @@ export async function saveProvider(data: {
   enabled?: boolean;
   priority?: number;
 }): Promise<{ success: boolean; validation?: { valid: boolean; error?: string } }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -129,13 +174,71 @@ export async function saveProvider(data: {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || 'Failed to save provider');
+    throw new Error(formatApiError(body));
+  }
+  return response.json();
+}
+
+export interface ContextModelEntry {
+  id: string;
+  provider: string;
+  context: number;
+  max_output: number;
+}
+
+export async function fetchContextConfig(): Promise<{
+  config: { models: ContextModelEntry[]; claude: Record<string, number> };
+}> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/context`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch context config');
+  return response.json();
+}
+
+export async function saveContextConfig(data: {
+  models: ContextModelEntry[];
+  claude: Record<string, number>;
+}): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/context`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export async function checkForUpdates(): Promise<{ version: string }> {
+  const response = await fetch(`${getProxyHttpBase()}/update-check`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error('Update check failed');
+  return response.json();
+}
+
+export async function patchProviderModels(
+  providerName: string,
+  models: string[],
+): Promise<{ success: boolean; models: string[] }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${providerName}/models`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ models }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
   }
   return response.json();
 }
 
 export async function deleteProvider(id: string): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${id}`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${id}`, {
     method: 'DELETE',
     signal: AbortSignal.timeout(5000),
   });
@@ -144,7 +247,7 @@ export async function deleteProvider(id: string): Promise<{ success: boolean }> 
 }
 
 export async function testProviderConnection(id: string): Promise<{ valid: boolean; error?: string }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${id}/validate`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${id}/validate`, {
     method: 'POST',
     signal: AbortSignal.timeout(15000),
   });
@@ -163,7 +266,7 @@ export async function fetchRoutes(): Promise<{
   }>;
   subagentModel?: string;
 }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/routes`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/routes`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch routes');
@@ -175,7 +278,7 @@ export async function saveRoutes(routes: Array<{
   providerName: string;
   targetModel: string;
 }>, subagentModel?: string): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/routes`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/routes`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ routes, subagentModel }),
@@ -188,12 +291,207 @@ export async function saveRoutes(routes: Array<{
 export async function fetchConfig(): Promise<{
   providers: Array<any>;
   routes: Array<any>;
+  routing?: { preferLowLatency?: boolean; preferLowCost?: boolean; tierFallback?: string[] };
+  experiments?: Array<any>;
+  activeProfile?: string;
+  profiles?: Record<string, unknown>;
 }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/config`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch config');
   return response.json();
+}
+
+export interface LatencyStat {
+  provider: string;
+  model: string;
+  count: number;
+  p50: number;
+  p95: number;
+  avg: number;
+  lastMs: number;
+}
+
+export async function fetchRoutingStats(): Promise<{ latency: LatencyStat[] }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/routing-stats`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch routing stats');
+  return response.json();
+}
+
+export async function saveRoutingPrefs(prefs: {
+  preferLowLatency?: boolean;
+  preferLowCost?: boolean;
+}): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/routing/prefs`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(prefs),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export async function saveProfileSnapshot(name: string): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/profiles/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export async function saveExperiments(experiments: RouteExperiment[]): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/experiments`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiments }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export interface ConfigAuditEntry {
+  id: string;
+  timestamp: string;
+  action: string;
+  summary?: string;
+  snapshotFile: string;
+}
+
+export async function fetchConfigAudit(): Promise<{ entries: ConfigAuditEntry[] }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config/audit`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch config audit');
+  return response.json();
+}
+
+export async function rollbackConfig(id: string): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config/rollback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export interface MetricsSummary {
+  uptimeMs: number;
+  activeStreams: number;
+  errorRate: number;
+  requestCount: number;
+  latency: { p50: number; p95: number; avg: number };
+  circuitBreakers: Array<{ provider: string; state: string }>;
+}
+
+export async function fetchMetricsSummary(): Promise<MetricsSummary> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/metrics/summary`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch metrics');
+  return response.json();
+}
+
+export interface ProviderHealthResult {
+  providerId: string;
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  latencyMs: number | null;
+  lastError: string | null;
+  circuitState: 'closed' | 'open' | 'half-open';
+  checkedAt: string;
+}
+
+export async function fetchAllProviderHealth(): Promise<{ providers: ProviderHealthResult[] }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/health`, {
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch provider health');
+  return response.json();
+}
+
+export async function replayRequest(replayId: string): Promise<{
+  success: boolean;
+  statusCode: number;
+  preview: string;
+}> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/replay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ replayId }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+  return response.json();
+}
+
+export async function fetchProfiles(): Promise<{ activeProfile: string; profiles: string[] }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/profiles`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch profiles');
+  return response.json();
+}
+
+export async function activateProfile(name: string): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/profiles/active`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export async function fetchPluginStatus(): Promise<Array<{ id: string; installed: boolean; path?: string }>> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/plugins`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch plugins');
+  return response.json();
+}
+
+export async function installPlugin(id: string): Promise<void> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/plugins/${id}/install`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+}
+
+export async function testNetworkConnection(port: number): Promise<{ ok: boolean; status?: string }> {
+  const base = `http://localhost:${port}`;
+  try {
+    const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) return { ok: false };
+    const data = await response.json();
+    return { ok: true, status: data.status };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export interface RequestLogEntry {
@@ -209,10 +507,11 @@ export interface RequestLogEntry {
   requestBodyPreview?: string;
   responsePreview?: string;
   retryCount?: number;
+  replayId?: string;
 }
 
 export async function fetchLogs(): Promise<RequestLogEntry[]> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/logs`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/logs`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch request logs');
@@ -224,7 +523,7 @@ export async function exportConfig(): Promise<{
   routes: Array<{ claudeTier: string; providerName: string; targetModel: string }>;
   settings: { port: number };
 }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/export`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config/export`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to export config');
@@ -232,7 +531,7 @@ export async function exportConfig(): Promise<{
 }
 
 export async function importConfig(data: object, strategy: 'merge' | 'replace'): Promise<{ success: boolean; backupPath?: string }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/import`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data, strategy }),
@@ -246,7 +545,7 @@ export async function importConfig(data: object, strategy: 'merge' | 'replace'):
 }
 
 export async function fetchDiff(incoming: object): Promise<{ current: object; incoming: object }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/diff`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/config/diff`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data: incoming }),
@@ -257,7 +556,7 @@ export async function fetchDiff(incoming: object): Promise<{ current: object; in
 }
 
 export async function fetchValidationResults(): Promise<Record<string, { valid: boolean; error?: string; timestamp: string; dismissed?: boolean }>> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/validation-results`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/validation-results`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch validation results');
@@ -265,7 +564,7 @@ export async function fetchValidationResults(): Promise<Record<string, { valid: 
 }
 
 export async function dismissValidationWarning(providerName: string): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/validation-results/${providerName}/dismiss`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/validation-results/${providerName}/dismiss`, {
     method: 'POST',
     signal: AbortSignal.timeout(5000),
   });
@@ -274,7 +573,7 @@ export async function dismissValidationWarning(providerName: string): Promise<{ 
 }
 
 export async function getRateLimit(providerId: string): Promise<{ providerName: string; requestsPerMinute: number }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${providerId}/rate-limit`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch rate limit');
@@ -282,7 +581,7 @@ export async function getRateLimit(providerId: string): Promise<{ providerName: 
 }
 
 export async function setRateLimit(providerId: string, rpm: number): Promise<{ success: boolean; providerName: string; requestsPerMinute: number }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${providerId}/rate-limit`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requestsPerMinute: rpm }),
@@ -292,13 +591,7 @@ export async function setRateLimit(providerId: string, rpm: number): Promise<{ s
   return response.json();
 }
 
-export async function fetchRecentLogs(): Promise<RequestLogEntry[]> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/logs`, {
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) throw new Error('Failed to fetch request logs');
-  return response.json();
-}
+export const fetchRecentLogs = fetchLogs;
 
 // ---------------------------------------------------------------------------
 // Discovery API
@@ -322,7 +615,7 @@ export interface DiscoveryStatus {
 }
 
 export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/discovery`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/discovery`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch discovery status');
@@ -330,7 +623,7 @@ export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
 }
 
 export async function scanDiscovery(): Promise<{ success: boolean; providers: DiscoveredProvider[] }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/discovery/scan`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/discovery/scan`, {
     method: 'POST',
     signal: AbortSignal.timeout(15000),
   });
@@ -354,7 +647,7 @@ export interface ThinkingConfig {
 }
 
 export async function fetchThinkingConfig(): Promise<ThinkingConfig> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/thinking-config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch thinking config');
@@ -362,7 +655,7 @@ export async function fetchThinkingConfig(): Promise<ThinkingConfig> {
 }
 
 export async function saveThinkingConfig(config: ThinkingConfig): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/thinking-config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
@@ -383,7 +676,7 @@ export interface CacheConfig {
 }
 
 export async function fetchCacheConfig(): Promise<CacheConfig> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/cache-config`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/cache-config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch cache config');
@@ -391,7 +684,7 @@ export async function fetchCacheConfig(): Promise<CacheConfig> {
 }
 
 export async function saveCacheConfig(config: CacheConfig): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/cache-config`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/cache-config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
@@ -402,7 +695,7 @@ export async function saveCacheConfig(config: CacheConfig): Promise<{ success: b
 }
 
 export async function scanProviderModels(providerName: string): Promise<{ models: string[] }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerName}/models`, {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${providerName}/models`, {
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) {
@@ -412,21 +705,201 @@ export async function scanProviderModels(providerName: string): Promise<{ models
   return response.json();
 }
 
-export async function fetchAutoCompactThreshold(): Promise<{ threshold: number }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/auto-compact`, {
+export async function fetchAutoCompactThreshold(): Promise<{ threshold: number; mode: 'suggest' | 'trigger' }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/auto-compact`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch auto-compact threshold');
   return response.json();
 }
 
-export async function saveAutoCompactThreshold(threshold: number): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${PROXY_API_BASE}/admin/auto-compact`, {
+export async function saveAutoCompactThreshold(
+  threshold: number,
+  mode?: 'suggest' | 'trigger',
+): Promise<{ success: boolean }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/auto-compact`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threshold }),
+    body: JSON.stringify({ threshold, mode }),
     signal: AbortSignal.timeout(10000),
   });
   if (!response.ok) throw new Error('Failed to save auto-compact threshold');
+  return response.json();
+}
+
+export async function fetchAliases(): Promise<{ aliases: Record<string, string> }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/aliases`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch aliases');
+  return response.json();
+}
+
+export async function saveAliases(aliases: Record<string, string>): Promise<{ success: boolean }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/aliases`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ aliases }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error('Failed to save aliases');
+  return response.json();
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding / benchmark / context stream / OpenRouter import
+// ---------------------------------------------------------------------------
+
+export interface OnboardingStatus {
+  complete: boolean;
+  hasProviders: boolean;
+  hasRoutes: boolean;
+}
+
+export async function fetchOnboardingStatus(): Promise<OnboardingStatus> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/onboarding`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch onboarding status');
+  return response.json();
+}
+
+export async function completeOnboarding(): Promise<{ success: boolean }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/onboarding/complete`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to complete onboarding');
+  return response.json();
+}
+
+export interface BenchmarkResult {
+  providerName: string;
+  targetModel: string;
+  tier?: string;
+  latencyMs: number;
+  statusCode: number;
+  success: boolean;
+  qualityOk: boolean;
+  outputPreview: string;
+  outputTokens: number;
+  error?: string;
+}
+
+export async function runBenchmark(params: {
+  providerName: string;
+  targetModel: string;
+  tier?: 'opus' | 'sonnet' | 'haiku';
+}): Promise<BenchmarkResult> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/benchmark`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Benchmark failed');
+  }
+  return response.json();
+}
+
+export interface ContextStreamPayload {
+  timestamp: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  model: string;
+  provider: string;
+  tier: string;
+  inflation: number;
+  limit: number;
+  usagePercent: number;
+}
+
+export async function importOpenRouterModels(
+  providerName: string,
+  filter: 'all' | 'free' | 'paid' = 'all',
+): Promise<{
+  success: boolean;
+  added: string[];
+  total: number;
+  catalogSize: number;
+  filter: string;
+}> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${providerName}/import-openrouter`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filter }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'OpenRouter import failed');
+  }
+  return response.json();
+}
+
+export interface NetworkConfig {
+  host: string;
+  requestedHost: string;
+  port: number;
+  lanBindAllowed: boolean;
+  restartRequired?: boolean;
+}
+
+export async function fetchNetworkConfig(): Promise<NetworkConfig> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/network`);
+  if (!response.ok) throw new Error('Failed to load network config');
+  return response.json();
+}
+
+export async function saveNetworkConfig(data: {
+  host?: string;
+  port?: number;
+}): Promise<NetworkConfig & { success: boolean }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/network`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to save network config');
+  }
+  const result = await response.json() as NetworkConfig & { success: boolean };
+  if (result.port) setProxyHttpBaseFromPort(result.port);
+  return result;
+}
+
+export interface MtlsStatus {
+  enabled: boolean;
+  ready: boolean;
+  port: number;
+  certDir: string;
+  configured: { enabled: boolean; port?: number };
+  generateScript: string;
+  restartRequired?: boolean;
+}
+
+export async function fetchMtlsStatus(): Promise<MtlsStatus> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/security/mtls`);
+  if (!response.ok) throw new Error('Failed to load mTLS status');
+  return response.json();
+}
+
+export async function saveMtlsConfig(data: {
+  enabled: boolean;
+  port?: number;
+}): Promise<MtlsStatus & { success: boolean }> {
+  const response = await adminFetch(`${getProxyHttpBase()}/admin/security/mtls`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || 'Failed to save mTLS config');
+  }
   return response.json();
 }

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useProxyStore } from '@/stores/proxyStore';
 import { useHealthStore } from '@/stores/healthStore';
+import { fetchMetricsSummary, type MetricsSummary } from '@/lib/api';
 import { StatusDot } from '@/components/StatusDot';
 import { StatusCard } from '@/components/StatusCard';
 import { ProviderHealthCard } from '@/components/ProviderHealthCard';
@@ -11,11 +12,12 @@ import { Network, GitCommit, Clock, Server, ClipboardCopy, Check } from 'lucide-
 import { useLogStore } from '@/stores/logStore';
 import { useLogStream } from '@/hooks/useLogStream';
 import { useToast } from '@/components/Toast';
+import { ContextGauge } from '@/components/ContextGauge';
 
 export function StatusPage() {
   const {
     status, port, version, startTime, providerCount,
-    lastError, checkHealth,
+    lastError, checkHealth, uptimeMs, activeStreams, baseUrl,
   } = useProxyStore();
   const { pollValidation, validationResults } = useHealthStore();
   const { toast } = useToast();
@@ -24,10 +26,23 @@ export function StatusPage() {
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
+
   // Initial health check on mount
   useEffect(() => {
     checkHealth();
   }, [checkHealth]);
+
+  useEffect(() => {
+    const loadMetrics = () => {
+      void fetchMetricsSummary()
+        .then(setMetrics)
+        .catch(() => setMetrics(null));
+    };
+    loadMetrics();
+    const interval = setInterval(loadMetrics, 10000);
+    return () => clearInterval(interval);
+  }, [status]);
 
   // Poll every 5 seconds (per D-38)
   useEffect(() => {
@@ -56,12 +71,11 @@ export function StatusPage() {
   }, [logEntries, lastAckedRetryKey, toast]);
 
   // Compute uptime
-  const uptime = startTime
-    ? Math.floor((Date.now() - startTime.getTime()) / 1000)
-    : null;
-  const uptimeDisplay = uptime !== null
-    ? `${Math.floor(uptime / 60)}m ${uptime % 60}s`
-    : '—';
+  const uptimeDisplay = uptimeMs != null
+    ? `${Math.floor(uptimeMs / 60000)}m ${Math.floor((uptimeMs % 60000) / 1000)}s`
+    : startTime
+      ? `${Math.floor((Date.now() - startTime.getTime()) / 60000)}m ${Math.floor(((Date.now() - startTime.getTime()) % 60000) / 1000)}s`
+      : '—';
 
   // Compute provider health counts
   const healthEntries = Object.entries(validationResults);
@@ -85,7 +99,7 @@ export function StatusPage() {
 
   const showBanner = lastError && lastError !== dismissedError;
 
-  const zshrcSnippet = `export ANTHROPIC_BASE_URL="http://localhost:3456"\nsource ~/.claude/claude-code-proxy/models.sh`;
+  const zshrcSnippet = `export ANTHROPIC_BASE_URL="${baseUrl}"\nsource ~/.claude/claude-code-proxy/models.sh`;
 
   async function copyZshrcSnippet() {
     try {
@@ -152,9 +166,38 @@ export function StatusPage() {
           value={providerCount.toString()}
           icon={Server}
         />
+        <StatusCard
+          label="Active streams"
+          value={activeStreams != null ? String(activeStreams) : '—'}
+          icon={Network}
+        />
+        {metrics && (
+          <>
+            <StatusCard
+              label="Error rate"
+              value={`${Math.round(metrics.errorRate * 100)}%`}
+              icon={GitCommit}
+            />
+            <StatusCard
+              label="Latency p50"
+              value={metrics.latency.p50 ? `${metrics.latency.p50}ms` : '—'}
+              icon={Clock}
+            />
+            <StatusCard
+              label="Latency p95"
+              value={metrics.latency.p95 ? `${metrics.latency.p95}ms` : '—'}
+              icon={Clock}
+            />
+          </>
+        )}
         {totalCount > 0 && (
           <ProviderHealthCard healthyCount={healthyCount} totalCount={totalCount} />
         )}
+      </div>
+
+      {/* Context gauge — live SSE */}
+      <div className="mb-lg">
+        <ContextGauge />
       </div>
 
       {/* Start/Stop controls */}
@@ -187,7 +230,7 @@ export function StatusPage() {
             <span className="text-[#569cd6]">export </span>
             <span className="text-[#9cdcfe]">ANTHROPIC_BASE_URL</span>
             <span className="text-[#d4d4d4]">=</span>
-            <span className="text-[#ce9178]">"http://localhost:3456"</span>{'\n'}
+            <span className="text-[#ce9178]">&quot;{baseUrl}&quot;</span>{'\n'}
             {'\n'}
             <span className="text-[#6a9955]"># Modelli configurati (auto-aggiornati dal proxy)</span>{'\n'}
             <span className="text-[#569cd6]">source </span>

@@ -132,6 +132,34 @@ describe('ConfigService export/import', () => {
       expect(result.providers[0].baseUrl).toBe('https://new.com');
     });
 
+    it('should preserve aliases and routing prefs in merge strategy', () => {
+      const svc = new ConfigService(testFile);
+      const current = {
+        providers: [],
+        routes: [],
+        aliases: { fast: 'haiku-model' },
+        routing: { preferLowLatency: true },
+        experiments: [{
+          id: 'e1',
+          tier: 'sonnet' as const,
+          enabled: true,
+          variants: [{ name: 'a', weight: 100, providerName: 'p', targetModel: 'm' }],
+        }],
+      };
+      svc.save(current as ReturnType<typeof validConfig> & typeof current);
+
+      const incoming = {
+        providers: [],
+        routes: [{ claudeTier: 'opus' as const, providerName: 'new', targetModel: 'new-model' }],
+      };
+
+      const result = svc.importConfig(incoming, 'merge');
+      expect(result.aliases).toEqual({ fast: 'haiku-model' });
+      expect(result.routing?.preferLowLatency).toBe(true);
+      expect(result.experiments).toHaveLength(1);
+      expect(result.routes[0].claudeTier).toBe('opus');
+    });
+
     it('should replace routes entirely in merge strategy', () => {
       const svc = new ConfigService(testFile);
       const current = {

@@ -2,14 +2,14 @@
  * Route resolution — shared logic for proxy handler and middleware.
  */
 
-import type { ClaudeTier, RouteResolution } from '../types/index.js';
+import type { ClaudeTier, ResolveRequestResult, RouteResolution } from '../types/index.js';
 import { providerService } from './provider.js';
 import { configService } from './config.js';
 import { circuitBreakerService } from './circuit-breaker.js';
+import { buildSmartRoute } from './smart-router.js';
 import { logger } from '../lib/logger.js';
 
 const SUBAGENT_TAG_RE = /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s;
-const TIER_FALLBACK: ClaudeTier[] = ['opus', 'sonnet', 'haiku'];
 
 function extractTier(modelName: string): ClaudeTier | null {
   const lower = modelName.toLowerCase();
@@ -59,8 +59,7 @@ export function extractSubagentModel(body: Record<string, unknown>): string | nu
 }
 
 export function isSubagentRequest(body: Record<string, unknown>): boolean {
-  const sys = getSystemRaw(body).toLowerCase();
-  if (sys.includes('ccr-subagent') || sys.includes('subagent')) return true;
+  if (extractSubagentModel(body)) return true;
 
   const metadata = body.metadata as Record<string, unknown> | undefined;
   if (metadata?.subagent === true || metadata?.is_subagent === true) return true;
@@ -77,6 +76,14 @@ export function isSubagentRequest(body: Record<string, unknown>): boolean {
   return false;
 }
 
+function resolveAlias(modelName: string): string {
+  const config = configService.load();
+  const aliases = config.aliases;
+  if (!aliases) return modelName;
+  const mapped = aliases[modelName];
+  return mapped || modelName;
+}
+
 function resolveModelToRoute(modelName: string): RouteResolution | null {
   if (modelName.startsWith('anthropic/')) {
     const parts = modelName.split('/');
@@ -84,7 +91,7 @@ function resolveModelToRoute(modelName: string): RouteResolution | null {
       const providerName = parts[1];
       const targetModel = parts.slice(2).join('/');
       const provider = providerService.getProvider(providerName);
-      if (provider) {
+      if (provider?.enabled) {
         return {
           provider,
           targetModel,
@@ -100,70 +107,85 @@ function resolveModelToRoute(modelName: string): RouteResolution | null {
   return providerService.resolveModelRoute(modelName);
 }
 
-function resolveTierFallback(
-  modelName: string,
-  current: RouteResolution,
-): RouteResolution | null {
-  const tier = current.claudeTier || extractTier(modelName);
-  if (!tier) return null;
-
-  const startIdx = TIER_FALLBACK.indexOf(tier);
-  for (let i = startIdx + 1; i < TIER_FALLBACK.length; i++) {
-    const fallbackTier = TIER_FALLBACK[i];
-    const route = providerService.getRoutes().find((r) => r.claudeTier === fallbackTier);
-    if (!route) continue;
-
-    const provider = providerService.getProvider(route.providerName);
-    if (!provider?.enabled) continue;
-    if (!circuitBreakerService.canRequest(provider.name)) continue;
-
-    logger.warn(
-      { from: tier, to: fallbackTier, provider: provider.name },
-      'Circuit open — falling back to lower tier',
-    );
-
-    return {
-      provider,
-      targetModel: route.targetModel,
-      originalModel: modelName,
-      claudeTier: fallbackTier,
-      fallbackTier: true,
-    };
-  }
-
-  return null;
-}
-
-function applyCircuitBreaker(resolution: RouteResolution, modelName: string): RouteResolution | null {
+function applyCircuitBreaker(resolution: RouteResolution): RouteResolution | null {
   if (circuitBreakerService.canRequest(resolution.provider.name)) {
     return resolution;
   }
-  return resolveTierFallback(modelName, resolution);
+  return null;
 }
 
-export interface ResolveRequestResult {
-  modelName: string;
-  resolution: RouteResolution | null;
+function buildStickyKey(
+  body: Record<string, unknown>,
+  modelName: string,
+  preference?: 'session' | 'user',
+): string {
+  const metadata = body.metadata as Record<string, unknown> | undefined;
+
+  if (preference === 'session') {
+    const sessionId = metadata?.session_id ?? metadata?.sessionId;
+    if (typeof sessionId === 'string' && sessionId.length > 0) return sessionId;
+    return modelName;
+  }
+
+  if (preference === 'user') {
+    const userId = metadata?.user_id;
+    if (typeof userId === 'string' && userId.length > 0) return userId;
+    const sessionId = metadata?.session_id ?? metadata?.sessionId;
+    if (typeof sessionId === 'string' && sessionId.length > 0) return sessionId;
+    return modelName;
+  }
+
+  const userId = metadata?.user_id;
+  if (typeof userId === 'string' && userId.length > 0) return userId;
+
+  const sessionId = metadata?.session_id ?? metadata?.sessionId;
+  if (typeof sessionId === 'string' && sessionId.length > 0) return sessionId;
+
+  return modelName;
 }
 
 export function resolveRequest(body: Record<string, unknown>): ResolveRequestResult {
   let modelName = (body.model as string) || 'claude-opus-4-20250514';
+  modelName = resolveAlias(modelName);
 
   const taggedModel = extractSubagentModel(body);
   if (taggedModel) {
-    modelName = taggedModel;
+    modelName = resolveAlias(taggedModel);
   } else {
     const config = configService.load();
     if (config.subagentModel && isSubagentRequest(body)) {
-      modelName = config.subagentModel;
+      modelName = resolveAlias(config.subagentModel);
       logger.info({ modelName }, 'Subagent model from config');
     }
   }
 
-  let resolution = resolveModelToRoute(modelName);
-  if (resolution) {
-    resolution = applyCircuitBreaker(resolution, modelName);
+  const primary = resolveModelToRoute(modelName);
+  if (!primary) {
+    return { modelName, resolution: null, candidates: [] };
   }
 
-  return { modelName, resolution };
+  const circuitOk = applyCircuitBreaker(primary);
+  const config = configService.load();
+  const experiment = primary.claudeTier
+    ? config.experiments?.find((e) => e.enabled && e.tier === primary.claudeTier)
+    : undefined;
+  const stickyKey = buildStickyKey(body, modelName, experiment?.stickyKey);
+  const smart = buildSmartRoute(modelName, primary, { stickyKey });
+
+  let candidates = smart.candidates;
+  if (!circuitOk && candidates.length > 0) {
+    candidates = candidates.filter((c) => circuitBreakerService.canRequest(c.provider.name));
+  }
+
+  const resolution = candidates[0] ?? circuitOk ?? null;
+
+  return {
+    modelName,
+    resolution,
+    candidates: resolution ? candidates : [],
+    experimentId: smart.experimentId,
+    experimentVariant: smart.experimentVariant,
+  };
 }
+
+export { extractTier };

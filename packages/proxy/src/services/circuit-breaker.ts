@@ -2,6 +2,8 @@
  * Circuit breaker per provider upstream.
  */
 
+import { eventBus } from './event-bus.js';
+
 export type CircuitState = 'closed' | 'open' | 'half-open';
 
 export interface CircuitBreakerConfig {
@@ -37,9 +39,13 @@ export class CircuitBreakerService {
     return c;
   }
 
-  private transitionToOpen(c: ProviderCircuit): void {
+  private transitionToOpen(providerName: string, c: ProviderCircuit): void {
+    const wasClosed = c.state !== 'open';
     c.state = 'open';
     c.openedAt = Date.now();
+    if (wasClosed) {
+      eventBus.emit('circuit.open', { provider: providerName, timestamp: new Date().toISOString() });
+    }
   }
 
   /** Check if requests should be allowed for this provider. */
@@ -77,13 +83,13 @@ export class CircuitBreakerService {
   recordFailure(providerName: string): void {
     const c = this.getOrCreate(providerName);
     if (c.state === 'half-open') {
-      this.transitionToOpen(c);
+      this.transitionToOpen(providerName, c);
       c.consecutiveFailures = this.config.failureThreshold;
       return;
     }
     c.consecutiveFailures++;
     if (c.consecutiveFailures >= this.config.failureThreshold) {
-      this.transitionToOpen(c);
+      this.transitionToOpen(providerName, c);
     }
   }
 

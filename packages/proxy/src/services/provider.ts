@@ -145,12 +145,11 @@ export class ProviderService {
   }
 
   /**
-   * Reload providers and routes from config
+   * Reload providers and routes from config (atomic swap — no clear on live map)
    */
   reload(providers: LLMProvider[], routes: ModelRoute[]): void {
-    this.providers.clear();
-    providers.forEach(p => this.providers.set(p.name, p));
-    this.routes = routes;
+    this.providers = new Map(providers.map((p) => [p.name, p]));
+    this.routes = [...routes];
   }
 
 }

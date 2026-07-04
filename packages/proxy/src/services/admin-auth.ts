@@ -43,14 +43,16 @@ export function ensureAdminToken(): string {
   return cachedToken;
 }
 
-/** Validate admin token from request headers. */
+/** Validate admin token from request headers or ?token= query (SSE/WebSocket). */
 export function validateAdminToken(req: Request): boolean {
   const expected = ensureAdminToken();
   const authHeader = req.headers.authorization;
   const headerToken = req.headers['x-admin-token'];
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : null;
 
   if (typeof headerToken === 'string' && headerToken === expected) return true;
   if (authHeader?.startsWith('Bearer ') && authHeader.slice(7) === expected) return true;
+  if (queryToken && queryToken === expected) return true;
 
   return false;
 }

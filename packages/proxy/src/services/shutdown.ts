@@ -32,6 +32,7 @@ export function isShuttingDown(): boolean {
 export interface ShutdownDeps {
   httpServer: Server;
   httpsServer?: Server | null;
+  mtlsServer?: import('https').Server | null;
   onShutdown?: () => Promise<void> | void;
   drainTimeoutMs?: number;
 }
@@ -79,6 +80,12 @@ export function setupGracefulShutdown(deps: ShutdownDeps): void {
     if (deps.httpsServer) {
       await new Promise<void>((resolve) => {
         deps.httpsServer!.close(() => resolve());
+      });
+    }
+
+    if (deps.mtlsServer) {
+      await new Promise<void>((resolve) => {
+        deps.mtlsServer!.close(() => resolve());
       });
     }
 

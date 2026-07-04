@@ -7,11 +7,13 @@
  * Per D-13: Config stores keyId (Keychain account name), never the actual key
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync } from 'fs';
+import { recordConfigAudit } from './config-audit.js';
 import { join } from 'path';
 import os from 'os';
 import { z } from 'zod';
-import type { ProxyConfig, LLMProvider, ModelRoute, ClaudeTier } from '../types/index.js';
+import type { LLMProvider, ModelRoute, ClaudeTier } from '../types/index.js';
+import { eventBus } from './event-bus.js';
 
 // Config directory and file paths
 const CONFIG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
@@ -50,21 +52,62 @@ const llmProviderSchema = z.object({
 });
 
 // ModelRoute schema
+const routeCandidateSchema = z.object({
+  providerName: providerNameSchema,
+  targetModel: modelNameSchema,
+  priority: z.number().int().min(0).max(100).optional(),
+  costTier: z.enum(['free', 'cheap', 'standard', 'premium']).optional(),
+});
+
 const modelRouteSchema = z.object({
   claudeTier: z.enum(['opus', 'sonnet', 'haiku']),
   providerName: providerNameSchema,
   targetModel: modelNameSchema,
+  candidates: z.array(routeCandidateSchema).optional(),
+  tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku'])).optional(),
+});
+
+const routeExperimentSchema = z.object({
+  id: z.string().min(1).max(50),
+  tier: z.enum(['opus', 'sonnet', 'haiku']),
+  enabled: z.boolean(),
+  variants: z.array(z.object({
+    name: z.string().min(1).max(50),
+    weight: z.number().min(0).max(100),
+    providerName: providerNameSchema,
+    targetModel: modelNameSchema,
+  })).min(1),
+  stickyKey: z.enum(['session', 'user']).optional(),
 });
 
 // ProxyConfig schema
 export const proxyConfigSchema = z.object({
+  host: z.string().optional(),
+  port: z.number().int().min(1).max(65535).optional(),
   providers: z.array(llmProviderSchema),
   routes: z.array(modelRouteSchema),
   subagentModel: z.string().optional(),
   autoCompactThreshold: z.number().min(0).max(1).optional(),
+  autoCompactMode: z.enum(['suggest', 'trigger']).optional(),
+  onboardingComplete: z.boolean().optional(),
+  aliases: z.record(z.string()).optional(),
+  experiments: z.array(routeExperimentSchema).optional(),
+  routing: z.object({
+    tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku'])).optional(),
+    preferLowLatency: z.boolean().optional(),
+    preferLowCost: z.boolean().optional(),
+  }).optional(),
   thinking: z.any().optional(),
   responseCache: z.any().optional(),
   discoveryConfig: z.any().optional(),
+  adminMtls: z.object({
+    enabled: z.boolean(),
+    port: z.number().int().min(1024).max(65535).optional(),
+  }).optional(),
+  adminPortSeparation: z.boolean().optional(),
+  adminHttpPort: z.number().int().min(1024).max(65535).optional(),
+  activeProfile: z.string().optional(),
+  profiles: z.record(z.unknown()).optional(),
 });
 
 export type AppConfig = z.infer<typeof proxyConfigSchema>;
@@ -78,10 +121,18 @@ export type AppConfig = z.infer<typeof proxyConfigSchema>;
 export class ConfigService {
   private configPath: string;
   private configDir: string;
+  private cachedConfig: AppConfig | null = null;
+  private cacheMtime = 0;
 
   constructor(configPath?: string) {
     this.configDir = CONFIG_DIR;
     this.configPath = configPath || CONFIG_FILE;
+    eventBus.on('config.invalidate', () => this.invalidateCache());
+  }
+
+  invalidateCache(): void {
+    this.cachedConfig = null;
+    this.cacheMtime = 0;
   }
 
   /**
@@ -93,16 +144,23 @@ export class ConfigService {
       if (!existsSync(this.configPath)) {
         return this.getDefaults();
       }
+
+      const mtime = statSync(this.configPath).mtimeMs;
+      if (this.cachedConfig && mtime === this.cacheMtime) {
+        return this.cachedConfig;
+      }
+
       const content = readFileSync(this.configPath, 'utf-8');
       const parsed = JSON.parse(content);
       
-      // Validate with zod
       const result = proxyConfigSchema.safeParse(parsed);
       if (!result.success) {
         console.error('[Config] Invalid config, using defaults:', result.error);
         return this.getDefaults();
       }
       
+      this.cachedConfig = result.data;
+      this.cacheMtime = mtime;
       return result.data;
     } catch (error) {
       console.error('[Config] Error loading config:', error);
@@ -133,6 +191,18 @@ export class ConfigService {
     
     // Rename to final location (atomic on POSIX)
     renameSync(tempPath, this.configPath);
+    this.cachedConfig = result.data;
+    try {
+      this.cacheMtime = statSync(this.configPath).mtimeMs;
+    } catch {
+      this.cacheMtime = Date.now();
+    }
+
+    try {
+      recordConfigAudit(result.data, 'save');
+    } catch {
+      // non-fatal audit failure
+    }
   }
 
   /**
@@ -140,6 +210,8 @@ export class ConfigService {
    */
   getDefaults(): AppConfig {
     return {
+      host: '127.0.0.1',
+      port: 3456,
       providers: [],
       routes: [
         { claudeTier: 'opus', providerName: 'opencode', targetModel: 'qwen3.6' },
@@ -181,7 +253,7 @@ export class ConfigService {
     return {
       providers: config.providers.map(p => ({ ...p, keyId: '••••' })),
       routes: config.routes,
-      settings: { port: 3456 },
+      settings: { port: config.port ?? 3456 },
     };
   }
 
@@ -216,6 +288,8 @@ export class ConfigService {
     }
 
     return {
+      ...current,
+      ...result.data,
       providers: Array.from(providerMap.values()),
       routes: result.data.routes,
     };

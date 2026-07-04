@@ -12,6 +12,7 @@
     "build": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-claude-code/shared": "*",
     "bottleneck": "^2.19.5",
     "cors": "^2.8.6",
     "tiktoken": "^1.0.22",

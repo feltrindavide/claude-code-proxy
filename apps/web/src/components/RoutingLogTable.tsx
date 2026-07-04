@@ -2,6 +2,8 @@
 import { useState, useMemo } from 'react';
 import { useLogStore } from '@/stores/logStore';
 import { useLogStream } from '@/hooks/useLogStream';
+import { replayRequest } from '@/lib/api';
+import { useToast } from '@/components/Toast';
 import { ArrowUp, ArrowDown, RefreshCw } from 'lucide-react';
 
 type SortDirection = 'asc' | 'desc' | null;
@@ -14,6 +16,7 @@ interface SortConfig {
 
 export function RoutingLogTable() {
   const { entries, isLoading, lastRefresh, error, fetchLogs, wsConnected } = useLogStore();
+  const { toast } = useToast();
   useLogStream();
   const [sort, setSort] = useState<SortConfig>({ key: 'timestamp', direction: 'desc' });
   const [filterProvider, setFilterProvider] = useState('all');
@@ -197,6 +200,30 @@ export function RoutingLogTable() {
                 </td>
                 <td className="py-xs border-b border-hairline-soft">
                   {e.durationMs}ms
+                  {e.requestBodyPreview && (
+                    <button
+                      type="button"
+                      className="ml-2 text-xs text-primary hover:underline"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(e.requestBodyPreview || '');
+                      }}
+                    >
+                      Copy
+                    </button>
+                  )}
+                  {e.replayId && (
+                    <button
+                      type="button"
+                      className="ml-2 text-xs text-primary hover:underline"
+                      onClick={() => {
+                        void replayRequest(e.replayId!)
+                          .then((r) => toast(r.success ? `Replay OK (${r.statusCode})` : `Replay failed (${r.statusCode})`, r.success ? 'success' : 'error'))
+                          .catch((err) => toast(err instanceof Error ? err.message : 'Replay failed', 'error'));
+                      }}
+                    >
+                      Replay
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

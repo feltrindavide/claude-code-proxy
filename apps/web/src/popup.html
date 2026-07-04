@@ -90,7 +90,20 @@
 
   <script>
     let status = 'stopped';
-    const API = 'http://localhost:3456';
+    const DEFAULT_API = 'http://localhost:3456';
+    let API = DEFAULT_API;
+    async function resolveApiBase() {
+      try {
+        const h = await fetch(`${DEFAULT_API}/health`).then(r => r.json());
+        if (h.port) return `http://localhost:${h.port}`;
+      } catch {}
+      return DEFAULT_API;
+    }
+
+    async function init() {
+      API = await resolveApiBase();
+      await refresh();
+    }
 
     async function refresh() {
       try {
@@ -141,7 +154,7 @@
       window.open('http://localhost:3457', '_blank');
     }
 
-    refresh();
+    init();
     setInterval(refresh, 5000);
   </script>
 </body>

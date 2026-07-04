@@ -4,7 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useLogStore } from '@/stores/logStore';
 import { ensureAdminToken, type RequestLogEntry } from '@/lib/api';
 
-const WS_BASE = 'ws://localhost:3456/admin/logs/stream';
+import { getProxyWsBase } from '@/lib/proxyBase';
 const FALLBACK_POLL_MS = 30_000;
 
 export function useLogStream(): void {
@@ -28,7 +28,7 @@ export function useLogStream(): void {
   const connect = useCallback(async () => {
     try {
       const token = await ensureAdminToken();
-      const ws = new WebSocket(`${WS_BASE}?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(`${getProxyWsBase()}/admin/logs/stream?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

@@ -42,6 +42,25 @@ describe('resolveRequest', () => {
     expect(resolution?.targetModel).toBe('z-ai/glm-4.5-air:free');
   });
 
+  it('returns null for disabled provider via gateway model id', () => {
+    providerService.reload(
+      [{
+        name: 'disabled',
+        baseUrl: 'https://openrouter.ai/api',
+        keyId: 'disabled',
+        models: ['z-ai/glm-4.5-air:free'],
+        enabled: false,
+        priority: 1,
+      }],
+      [{ claudeTier: 'opus', providerName: 'disabled', targetModel: 'z-ai/glm-4.5-air:free' }],
+    );
+    const { resolution } = resolveRequest({
+      model: 'anthropic/disabled/z-ai/glm-4.5-air:free',
+      messages: [],
+    });
+    expect(resolution).toBeNull();
+  });
+
   it('extracts subagent model from system tag', () => {
     const body = {
       model: 'claude-sonnet-4-20250514',
@@ -94,10 +113,17 @@ describe('resolveRequest circuit breaker fallback', () => {
 });
 
 describe('isSubagentRequest', () => {
-  it('detects subagent in system prompt', () => {
+  it('detects CCR subagent model tag in system prompt', () => {
     expect(isSubagentRequest({
       messages: [],
-      system: 'You are a subagent working on a task',
+      system: 'Task <CCR-SUBAGENT-MODEL>haiku-model</CCR-SUBAGENT-MODEL>',
+    })).toBe(true);
+  });
+
+  it('detects subagent metadata flag', () => {
+    expect(isSubagentRequest({
+      messages: [],
+      metadata: { subagent: true },
     })).toBe(true);
   });
 

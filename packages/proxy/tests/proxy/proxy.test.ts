@@ -34,6 +34,19 @@ describe('Proxy Middleware', () => {
     });
   });
 
+  describe('tool_use JSON parsing', () => {
+    it('falls back to empty object on malformed JSON', () => {
+      let toolInput: Record<string, unknown> = { keep: true };
+      const parsedInput = '{not valid json';
+      try {
+        toolInput = JSON.parse(parsedInput) as Record<string, unknown>;
+      } catch {
+        toolInput = {};
+      }
+      expect(toolInput).toEqual({});
+    });
+  });
+
   describe('shouldFlushStreamBuffer', () => {
     it('flushes immediately on content_block_delta', () => {
       expect(shouldFlushStreamBuffer({

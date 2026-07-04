@@ -5,6 +5,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    env: {
+      PROXY_NO_AUTOSTART: '1',
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

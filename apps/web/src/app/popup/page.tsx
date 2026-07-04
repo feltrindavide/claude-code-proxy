@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
-
-const API = 'http://localhost:3456';
+import { getProxyHttpBase } from '@/lib/proxyBase';
 
 interface Provider { name: string; models: string[]; enabled: boolean; }
 interface RouteEntry { claudeTier: string; providerName: string; targetModel: string; }
@@ -25,6 +24,7 @@ export default function PopupPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [discoveredCount, setDiscoveredCount] = useState(0);
   const refresh = useCallback(async () => {
+    const API = getProxyHttpBase();
     try {
       const [h, r, p, d] = await Promise.all([
         fetch(`${API}/health`).then(r => r.json()),
@@ -44,7 +44,7 @@ export default function PopupPage() {
     const nr = routes.map(r => r.claudeTier === tier ? { ...r, [field]: value } : r);
     if (!nr.find(r => r.claudeTier === tier)) nr.push({ claudeTier: tier, providerName: '', targetModel: '' });
     try {
-      await fetch(`${API}/admin/routes`, {
+      await fetch(`${getProxyHttpBase()}/admin/routes`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ routes: nr.filter(r => r.providerName && r.targetModel) }),
       });
@@ -158,12 +158,12 @@ export default function PopupPage() {
 
       {/* Buttons */}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => openUrl('http://localhost:3456')}
+        <button onClick={() => openUrl('http://localhost:3457')}
           style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Dashboard
         </button>
-        <button onClick={() => openUrl('http://localhost:3456/settings')}
+        <button onClick={() => openUrl('http://localhost:3457/settings')}
           style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Settings

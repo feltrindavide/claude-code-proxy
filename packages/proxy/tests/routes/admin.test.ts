@@ -69,5 +69,12 @@ describe('Admin API', () => {
       });
       expect([200, 500]).toContain(response.status);
     });
+
+    it('should reject invalid routes with 400', async () => {
+      const response = await auth('put', '/admin/routes').send({
+        routes: [{ providerName: 'x', targetModel: 'y' }],
+      });
+      expect(response.status).toBe(400);
+    });
   });
 });

@@ -18,13 +18,13 @@ import { providerValidatorService } from './services/provider-validator.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
+import { shutdownGateMiddleware } from './middleware/shutdownGate.js';
+import { lanProxyAuthMiddleware } from './middleware/lanProxyAuth.js';
+import { routeResolverMiddleware } from './middleware/routeResolverMiddleware.js';
 import { requestLogService } from './services/requestLog.js';
 import { validationStoreService } from './services/validationStore.js';
 import adminRouter from './routes/admin.js';
 import type { LLMProvider, ModelRoute } from './types/index.js';
-
-const DEFAULT_PORT = 3456;
-const DEFAULT_HOST = 'localhost';
 
 import { writeModelEnvFile } from './services/modelEnv.js';
 import { LocalDiscoveryService } from './services/local-discovery.js';
@@ -34,24 +34,36 @@ import { setDiscoveryService, getDiscoveryService } from './services/discovery-r
 import { adminAuthMiddleware } from './middleware/adminAuth.js';
 import { prewarmAdapters } from './adapters/index.js';
 import { attachLogWebSocket, closeLogWebSocket } from './services/log-broadcast.js';
-import { setupGracefulShutdown } from './services/shutdown.js';
+import { setupGracefulShutdown, getActiveStreamCount, isShuttingDown } from './services/shutdown.js';
 import { rateLimiterService } from './services/rateLimiter.js';
+import { startConfigWatcher, stopConfigWatcher } from './services/config-watcher.js';
+import { closeContextStreams } from './services/context-broadcast.js';
+import { setupDesktopEnv } from './services/desktop-env.js';
+import { resolveBindHost, resolvePort, DEFAULT_HOST, DEFAULT_PORT } from './services/network.js';
+import {
+  startAdminMtlsServer,
+  closeAdminMtlsServer,
+  getAdminMtlsStatus,
+} from './services/admin-mtls.js';
+import {
+  createAdminOnlyApp,
+  startAdminHttpServer,
+  closeAdminHttpServer,
+} from './services/admin-http.js';
 import { logger } from './lib/logger.js';
 import type { Server } from 'http';
-
-const app = express();
-
-// Middleware
-app.use(cors());
-app.use(requestIdMiddleware);
-app.use(express.json({ limit: '32mb' }));
+import {
+  syncSkillFile,
+  syncScriptFile,
+  resolvePluginPaths,
+} from './services/plugin-installer.js';
 
 // Try to read app version from bundled package.json (production) or proxy package.json (dev)
 let APP_VERSION = '1.0.0';
 try {
   const pkgPaths = [
-    path.join(__dirname, '../package.json'),      // CJS bundle: proxy-bundle/package.json
-    path.join(__dirname, '../../package.json'),   // dev tsx: packages/proxy/package.json → root
+    path.join(__dirname, '../package.json'),
+    path.join(__dirname, '../../package.json'),
   ];
   for (const p of pkgPaths) {
     if (fs.existsSync(p)) {
@@ -64,65 +76,96 @@ try {
   }
 } catch {}
 
-// Mount admin API routes (D-05)
-app.use('/admin', adminRouter);
+const SERVER_START_TIME = Date.now();
 
-  // Mount system proxy setup route
-  setupSystemProxyRoutes();
+/** Build Express app (inference + optional admin routes). */
+export function createApp(options?: { mountAdmin?: boolean }): express.Application {
+  const mountAdmin = options?.mountAdmin !== false;
+  const application = express();
 
-  // Health check endpoint (D-02)
-  app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    port: DEFAULT_PORT,
-    version: APP_VERSION,
-  });
-});
+  application.use(cors({
+    origin: [
+      'http://localhost:3457',
+      'http://127.0.0.1:3457',
+      'tauri://localhost',
+      'http://tauri.localhost',
+    ],
+  }));
+  application.use(requestIdMiddleware);
+  application.use(express.json({ limit: '32mb' }));
 
-// Admin endpoints (D-05)
-
-// GET /config - Get current configuration
-app.get('/config', (req, res) => {
-  const providers = providerService.getProviders();
-  // Don't expose keyId in response
-  const safeProviders = providers.map(({ keyId, ...rest }) => rest);
-  res.json({
-    providers: safeProviders,
-  });
-});
-
-// GET /v1/models — gateway model discovery per Claude Code
-// I model ID usano formato "anthropic/{providerName}/{targetModel}"
-// Claude Code li mostra nel picker e li riconosce come gateway models
-app.get('/v1/models', (req, res) => {
-  const routes = providerService.getRoutes();
-  const data: Array<{
-    type: string;
-    id: string;
-    display_name: string;
-    created_at: string;
-  }> = [];
-
-  for (const route of routes) {
-    data.push({
-      type: 'model',
-      id: `anthropic/${route.providerName}/${route.targetModel}`,
-      display_name: route.targetModel,
-      created_at: new Date().toISOString(),
-    });
+  if (mountAdmin) {
+    application.use('/admin', adminRouter);
+    setupSystemProxyRoutes(application);
   }
 
-  res.json({
-    data,
-    has_more: false,
-    first_id: data[0]?.id ?? null,
-    last_id: data[data.length - 1]?.id ?? null,
+  application.get('/health', (_req, res) => {
+    const cfg = configService.load();
+    res.json({
+      status: isShuttingDown() ? 'draining' : 'ok',
+      host: resolveBindHost(cfg.host),
+      port: resolvePort(cfg.port),
+      version: APP_VERSION,
+      adminMtls: getAdminMtlsStatus(),
+      uptimeMs: Date.now() - SERVER_START_TIME,
+      activeStreams: getActiveStreamCount(),
+      configVersion: cfg.port ?? DEFAULT_PORT,
+    });
   });
-});
 
-// Mount proxy handler at /v1/messages (PROX-01, PROX-02, PROX-05)
-// Request logging middleware inserted before handleProxyRequest (04-01)
-  app.post('/v1/messages', express.json({ limit: '32mb' }), requestLoggerMiddleware, rateLimitMiddleware, handleProxyRequest);
+  application.get('/v1/models', (req, res) => {
+    const routes = providerService.getRoutes();
+    const config = configService.load();
+    const data: Array<{
+      type: string;
+      id: string;
+      display_name: string;
+      created_at: string;
+    }> = [];
+
+    for (const route of routes) {
+      data.push({
+        type: 'model',
+        id: `anthropic/${route.providerName}/${route.targetModel}`,
+        display_name: route.targetModel,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    if (config.aliases) {
+      for (const [alias, target] of Object.entries(config.aliases)) {
+        if (!target) continue;
+        data.push({
+          type: 'model',
+          id: alias,
+          display_name: `${alias} → ${target}`,
+          created_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    res.json({
+      data,
+      has_more: false,
+      first_id: data[0]?.id ?? null,
+      last_id: data[data.length - 1]?.id ?? null,
+    });
+  });
+
+  application.post(
+    '/v1/messages',
+    lanProxyAuthMiddleware,
+    shutdownGateMiddleware,
+    routeResolverMiddleware,
+    requestLoggerMiddleware,
+    rateLimitMiddleware,
+    handleProxyRequest,
+  );
+
+  return application;
+}
+
+export let app = createApp();
 
 /**
  * Migrazione: ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/
@@ -241,41 +284,35 @@ function installPluginOnStartup(): void {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (!home) return;
 
-  const scriptsDir = path.join(home, '.claude', 'claude-code-proxy', 'scripts');
-  const skillDest = path.join(home, '.claude', 'skills', 'proxy-context', 'SKILL.md');
-  const statusScriptDest = path.join(scriptsDir, 'context-status.js');
-  const compactHookDest = path.join(scriptsDir, 'auto-compact-hook.js');
-  const settingsPath = path.join(home, '.claude', 'settings.json');
-  const nodeBin = process.argv[0]; // full path to node binary
+  const paths = resolvePluginPaths(home);
+  const nodeBin = process.argv[0];
 
   let installed = false;
 
-  // Installa SKILL.md (solo se assente)
-  if (skillSrc && !fs.existsSync(skillDest)) {
-    fs.mkdirSync(path.dirname(skillDest), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(skillDest, fs.readFileSync(skillSrc, 'utf-8'), { mode: 0o600 });
-    console.log('[Setup] Installed proxy-context skill →', skillDest);
+  if (skillSrc) {
+    const result = syncSkillFile(skillSrc, paths.skillDest, APP_VERSION);
+    if (result === 'installed') {
+      logger.info({ path: paths.skillDest, version: APP_VERSION }, 'Installed proxy-context skill');
+      installed = true;
+    } else if (result === 'updated') {
+      logger.info({ path: paths.skillDest, version: APP_VERSION }, 'Updated proxy-context skill');
+      installed = true;
+    }
+  }
+
+  if (statusScriptSrc && syncScriptFile(statusScriptSrc, paths.statusScriptDest)) {
+    if (!installed) logger.info({ path: paths.statusScriptDest }, 'Synced context-status script');
     installed = true;
   }
 
-  // Sincronizza script hook (sovrascrive per propagare fix come admin token)
-  if (statusScriptSrc) {
-    fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(statusScriptDest, fs.readFileSync(statusScriptSrc, 'utf-8'), { mode: 0o755 });
-    if (!installed) console.log('[Setup] Synced context-status script →', statusScriptDest);
+  if (compactHookSrc && syncScriptFile(compactHookSrc, paths.compactHookDest)) {
+    if (!installed) logger.info({ path: paths.compactHookDest }, 'Synced auto-compact hook');
     installed = true;
   }
 
-  if (compactHookSrc) {
-    fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(compactHookDest, fs.readFileSync(compactHookSrc, 'utf-8'), { mode: 0o755 });
-    if (!installed) console.log('[Setup] Synced auto-compact hook →', compactHookDest);
-    installed = true;
-  }
-
-  // Aggiorna settings.json con status line e hook (solo se non già presenti)
-  const statusLineCmd = `"${nodeBin}" "${statusScriptDest}"`;
-  const compactHookCmd = `"${nodeBin}" "${compactHookDest}"`;
+  const statusLineCmd = `"${nodeBin}" "${paths.statusScriptDest}"`;
+  const compactHookCmd = `"${nodeBin}" "${paths.compactHookDest}"`;
+  const settingsPath = paths.settingsPath;
 
   try {
     let settings: Record<string, unknown> = {};
@@ -290,7 +327,7 @@ function installPluginOnStartup(): void {
     // Status line - imposta se non configurata O se il percorso non esiste più
     const existingCmd = (settings.statusLine as Record<string, unknown> | undefined)?.command as string | undefined;
     const statusLineValid = existingCmd && (
-      existingCmd.includes(statusScriptDest) ||
+      existingCmd.includes(paths.statusScriptDest) ||
       fs.existsSync(existingCmd.replace(/^"|"$/g, '').split(' ').pop() || '')
     );
     if (!statusLineValid) {
@@ -315,7 +352,7 @@ function installPluginOnStartup(): void {
       ),
     );
 
-    if (!hasCompactHook && fs.existsSync(compactHookDest)) {
+    if (!hasCompactHook && fs.existsSync(paths.compactHookDest)) {
       // Add to existing matcher or create new one
       const bashMatcher = hooks.find((h: any) => h.matcher === 'Bash|Edit|Write|MultiEdit|Agent|Task');
       if (bashMatcher) {
@@ -466,29 +503,6 @@ app.get('/update-check', async (_req, res) => {
 });
 
 /**
- * Imposta ANTHROPIC_BASE_URL per le app GUI via launchctl.
- * Permette a Claude Desktop di usare il proxy.
- */
-function setupLaunchctlEnv(): void {
-  try {
-    const current = execSync(
-      'launchctl getenv ANTHROPIC_BASE_URL 2>/dev/null || true',
-      { encoding: 'utf-8', timeout: 2000 },
-    ).trim();
-
-    if (current !== `http://localhost:3456`) {
-      execSync(
-        'launchctl setenv ANTHROPIC_BASE_URL http://localhost:3456',
-        { timeout: 2000 },
-      );
-      console.log('[Setup] Set ANTHROPIC_BASE_URL via launchctl for GUI apps (Claude Desktop)');
-    }
-  } catch (err) {
-    console.warn('[Setup] Could not set launchctl env:', err instanceof Error ? err.message : 'unknown');
-  }
-}
-
-/**
  * Crea un certificato self-signed per api.anthropic.com se non esiste già.
  * Salva in ~/.claude/claude-code-proxy/data/certs/
  */
@@ -559,8 +573,8 @@ function startHttpsServer(app: express.Application, httpsPort: number): void {
  * POST /admin/setup-desktop — scrive lo script di setup.
  * L'utente lo esegue con: sudo ~/.claude/claude-code-proxy/scripts/setup-desktop.sh
  */
-function setupSystemProxyRoutes(): void {
-  app.post('/admin/setup-desktop', adminAuthMiddleware, express.json(), async (_req, res) => {
+function setupSystemProxyRoutes(targetApp: express.Application): void {
+  targetApp.post('/admin/setup-desktop', adminAuthMiddleware, express.json(), async (_req, res) => {
     try {
       const certs = ensureCert();
       if (!certs) {
@@ -633,32 +647,75 @@ echo "To verify: curl -sk https://api.anthropic.com/health"
 }
 
 let httpServer: Server | null = null;
+let adminMtlsApp: express.Application | null = null;
+
+/** Minimal app exposing only /admin for mTLS listener */
+function createAdminMtlsApp(): express.Application {
+  const adminApp = express();
+  adminApp.use(cors());
+  adminApp.use(express.json({ limit: '32mb' }));
+  adminApp.use('/admin', adminRouter);
+  adminApp.get('/health', (_req, res) => {
+    res.json({ status: 'ok', mtls: true, ...getAdminMtlsStatus() });
+  });
+  return adminApp;
+}
 
 /**
  * Start the Express server
  */
-export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
+export async function startServer(port: number = DEFAULT_PORT, host?: string): Promise<void> {
   migrateFromOldPath();
-  setupLaunchctlEnv();
+  setupDesktopEnv();
   contextRegistry.ensureDefaults();
   await loadConfigOnStartup();
   ensureAdminToken();
 
+  const config = configService.load();
+  const bindHost = resolveBindHost(host ?? config.host ?? DEFAULT_HOST);
+  const bindPort = resolvePort(port ?? config.port);
+  const adminSeparated = config.adminPortSeparation === true;
+  const adminHttpPort = config.adminHttpPort ?? 3458;
+
+  if (adminSeparated) {
+    app = createApp({ mountAdmin: false });
+  }
+
+  startConfigWatcher();
+  adminMtlsApp = createAdminMtlsApp();
+
+  if (adminSeparated) {
+    const adminOnlyApp = createAdminOnlyApp();
+    startAdminHttpServer(adminOnlyApp, adminHttpPort, bindHost);
+    logger.info(`Admin API (separated): http://${bindHost}:${adminHttpPort}/admin`);
+  }
+
   return new Promise((resolve, reject) => {
-    httpServer = app.listen(port, host, () => {
-      logger.info({ host, port }, 'Claude Code Proxy started');
-      logger.info(`Admin API:  http://${host}:${port}/admin`);
-      logger.info(`Health:   http://${host}:${port}/health`);
-      logger.info(`Proxy:    http://${host}:${port}/v1/*`);
+    httpServer = app.listen(bindPort, bindHost, () => {
+      logger.info({ host: bindHost, port: bindPort }, 'Claude Code Proxy started');
+      logger.info(`Admin API:  http://${bindHost}:${bindPort}/admin`);
+      logger.info(`Health:   http://${bindHost}:${bindPort}/health`);
+      logger.info(`Proxy:    http://${bindHost}:${bindPort}/v1/*`);
 
       attachLogWebSocket(httpServer!);
       startHttpsServer(app, 8743);
 
+      const mtlsServer = adminMtlsApp ? startAdminMtlsServer(adminMtlsApp) : null;
+      if (mtlsServer) {
+        const mtlsPort = getAdminMtlsStatus().port;
+        logger.info(`Admin mTLS: https://127.0.0.1:${mtlsPort}/admin`);
+      }
+
       setupGracefulShutdown({
         httpServer: httpServer!,
         httpsServer,
+        mtlsServer,
         onShutdown: async () => {
           getDiscoveryService()?.stop();
+          stopConfigWatcher();
+          closeContextStreams();
+          closeAdminMtlsServer();
+          closeAdminHttpServer();
           await rateLimiterService.disconnect();
           closeLogWebSocket();
         },
@@ -669,7 +726,7 @@ export async function startServer(port: number = DEFAULT_PORT, host: string = DE
 
     httpServer.on('error', (err: Error) => {
       if (err.message.includes('EADDRINUSE')) {
-        logger.error({ port }, 'Port already in use');
+        logger.error({ port: bindPort }, 'Port already in use');
       } else {
         logger.error({ err: err.message }, 'Failed to start server');
       }
@@ -678,7 +735,12 @@ export async function startServer(port: number = DEFAULT_PORT, host: string = DE
   });
 }
 
-// Start server - always starts regardless of NODE_ENV
-startServer().catch(console.error);
+const isDirectRun = Boolean(
+  process.argv[1]?.includes('index.ts')
+  || process.argv[1]?.includes('index.js')
+  || process.argv[1]?.includes('index.cjs'),
+);
 
-export { app };
+if (process.env.PROXY_NO_AUTOSTART !== '1' && isDirectRun) {
+  startServer().catch(console.error);
+}

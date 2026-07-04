@@ -1,30 +1,46 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { fetchConfig, fetchThinkingConfig, saveThinkingConfig, fetchCacheConfig, saveCacheConfig } from '@/lib/api';
-import type { ThinkingConfig, CacheConfig, TierThinkingConfig } from '@/lib/api';
+import {
+  fetchConfig,
+  fetchThinkingConfig,
+  saveThinkingConfig,
+  fetchCacheConfig,
+  saveCacheConfig,
+  fetchNetworkConfig,
+  saveNetworkConfig,
+  fetchMtlsStatus,
+  saveMtlsConfig,
+  checkHealth,
+  checkForUpdates,
+  testNetworkConnection,
+} from '@/lib/api';
+import type { ThinkingConfig, CacheConfig, TierThinkingConfig, MtlsStatus } from '@/lib/api';
 import { openDownloadPage } from '@/services/updater';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Select } from '@/components/ui/Select';
-import { Shield, RefreshCw, Brain, Database } from 'lucide-react';
+import { Shield, RefreshCw, Brain, Database, Save } from 'lucide-react';
 
 export function SettingsForm() {
   const { toast } = useToast();
   const [port, setPort] = useState('3456');
-  const [autoStart, setAutoStart] = useState(true);
+  const [bindHost, setBindHost] = useState('127.0.0.1');
+  const [lanBindAllowed, setLanBindAllowed] = useState(false);
   const [keychainAvailable, setKeychainAvailable] = useState<boolean | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [savingAll, setSavingAll] = useState(false);
+  const [savingNetwork, setSavingNetwork] = useState(false);
+  const [testingNetwork, setTestingNetwork] = useState(false);
+  const [mtlsStatus, setMtlsStatus] = useState<MtlsStatus | null>(null);
+  const [savingMtls, setSavingMtls] = useState(false);
   const [appVersion, setAppVersion] = useState('...');
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
-  // Thinking config
   const [thinkingConfig, setThinkingConfig] = useState<ThinkingConfig | null>(null);
   const [savingThinking, setSavingThinking] = useState(false);
 
-  // Cache config
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
   const [savingCache, setSavingCache] = useState(false);
 
@@ -35,13 +51,24 @@ export function SettingsForm() {
 
   async function loadSettings() {
     try {
-      const config = await fetchConfig();
-      setPort('3456');
+      await fetchConfig();
       setKeychainAvailable(true);
-      // Read version from health endpoint
+
+      const [network, mtls] = await Promise.all([
+        fetchNetworkConfig().catch(() => null),
+        fetchMtlsStatus().catch(() => null),
+      ]);
+      if (network) {
+        setBindHost(network.host);
+        setPort(String(network.port));
+        setLanBindAllowed(network.lanBindAllowed);
+      }
+      if (mtls) setMtlsStatus(mtls);
+
       try {
-        const health = await fetch('http://localhost:3456/health').then(r => r.json());
+        const health = await checkHealth();
         if (health.version) setAppVersion(health.version);
+        if (health.port) setPort(String(health.port));
       } catch {}
     } catch {
       setKeychainAvailable(false);
@@ -57,6 +84,23 @@ export function SettingsForm() {
       if (thinking) setThinkingConfig(thinking);
       if (cache) setCacheConfig(cache);
     } catch {}
+  }
+
+  async function handleSaveAll() {
+    setSavingAll(true);
+    try {
+      await saveNetworkConfig({
+        host: bindHost,
+        port: parseInt(port, 10) || 3456,
+      });
+      if (thinkingConfig) await saveThinkingConfig(thinkingConfig);
+      if (cacheConfig) await saveCacheConfig(cacheConfig);
+      toast('All settings saved', 'success');
+    } catch {
+      toast('Failed to save some settings', 'error');
+    } finally {
+      setSavingAll(false);
+    }
   }
 
   async function handleSaveThinking() {
@@ -102,13 +146,9 @@ export function SettingsForm() {
     setUpdateStatus('Checking...');
     setUpdateAvailable(null);
     try {
-      // Fetch latest version via local proxy (avoids CORS issues)
-      const resp = await fetch('http://localhost:3456/update-check');
-      const data = await resp.json();
+      const data = await checkForUpdates();
       const latestVer = data.version;
-      console.log('[Update] Latest:', latestVer, 'Current:', appVersion);
 
-      // Parse and compare
       const parse = (v: string) => v.split('.').map(n => parseInt(n) || 0);
       const cur = parse(appVersion);
       const lat = parse(latestVer);
@@ -124,33 +164,103 @@ export function SettingsForm() {
       }
 
       setUpdateStatus(`✓ v${appVersion} is up to date`);
-      setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
-    } catch (e: any) {
-      setUpdateStatus(`✗ Check failed: ${e?.message || 'Error'}`);
-      setTimeout(() => { setUpdateStatus(null); setCheckingUpdate(false); }, 5000);
-      console.error('[Update]', e);
+      setTimeout(() => setUpdateStatus(null), 5000);
+    } catch (e: unknown) {
+      setUpdateStatus(`✗ Check failed: ${e instanceof Error ? e.message : 'Error'}`);
+      setTimeout(() => setUpdateStatus(null), 5000);
+    } finally {
+      setCheckingUpdate(false);
     }
   }
 
-  async function handleSave() {
-    setSaving(true);
+  async function handleTestNetwork() {
+    setTestingNetwork(true);
     try {
-      // Save settings to config
-      toast('Settings saved', 'success');
-    } catch {
-      toast('Failed to save settings', 'error');
+      const result = await testNetworkConnection(parseInt(port, 10) || 3456);
+      toast(
+        result.ok ? `Proxy reachable (${result.status})` : 'Proxy not reachable on this port',
+        result.ok ? 'success' : 'error',
+      );
     } finally {
-      setSaving(false);
+      setTestingNetwork(false);
+    }
+  }
+
+  async function handleSaveNetwork() {
+    setSavingNetwork(true);
+    try {
+      const result = await saveNetworkConfig({
+        host: bindHost,
+        port: parseInt(port, 10) || 3456,
+      });
+      setBindHost(result.host);
+      setPort(String(result.port));
+      toast(
+        result.restartRequired
+          ? 'Network settings saved — restart proxy to apply'
+          : 'Network settings saved',
+        'success',
+      );
+    } catch {
+      toast('Failed to save network settings', 'error');
+    } finally {
+      setSavingNetwork(false);
+    }
+  }
+
+  async function handleToggleMtls(enabled: boolean) {
+    setSavingMtls(true);
+    try {
+      const result = await saveMtlsConfig({
+        enabled,
+        port: mtlsStatus?.port,
+      });
+      setMtlsStatus(result);
+      toast(
+        result.restartRequired
+          ? `Admin mTLS ${enabled ? 'enabled' : 'disabled'} — restart proxy to apply`
+          : `Admin mTLS ${enabled ? 'enabled' : 'disabled'}`,
+        'success',
+      );
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to update mTLS', 'error');
+    } finally {
+      setSavingMtls(false);
     }
   }
 
   return (
     <div className="max-w-2xl mx-auto space-y-lg">
-      <h2 className="font-display text-[22px] text-ink">Settings</h2>
+      <div className="flex items-center justify-between gap-md">
+        <h2 className="font-display text-[22px] text-ink">Settings</h2>
+        <Button
+          variant="primary"
+          onClick={handleSaveAll}
+          loading={savingAll}
+          loadingText="Saving..."
+        >
+          <Save className="w-4 h-4" />
+          Save All
+        </Button>
+      </div>
 
-      {/* Proxy Configuration */}
       <Card title="Proxy Configuration">
         <div className="space-y-lg">
+          <Input
+            label="Bind Address"
+            type="text"
+            value={bindHost}
+            onChange={(e) => setBindHost(e.target.value)}
+            placeholder="127.0.0.1"
+          />
+          <p className="text-small text-muted -mt-sm">
+            Localhost-only by default. Set ALLOW_LAN_BIND=true to bind on other interfaces.
+            {lanBindAllowed ? ' (LAN bind allowed)' : ''}
+          </p>
+          <p className="text-small text-muted">
+            API calls will use port <span className="font-mono text-ink">{port || '3456'}</span> after restart.
+          </p>
+
           <Input
             label="Proxy Port"
             type="number"
@@ -159,15 +269,23 @@ export function SettingsForm() {
             placeholder="3456"
           />
 
-          <label className="flex items-center gap-xs cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoStart}
-              onChange={(e) => setAutoStart(e.target.checked)}
-              className="w-4 h-4 rounded border-hairline text-primary focus:ring-primary"
-            />
-            <span className="text-sm text-body">Auto-start proxy on app launch</span>
-          </label>
+          <Button
+            variant="secondary"
+            onClick={handleSaveNetwork}
+            loading={savingNetwork}
+            loadingText="Saving..."
+          >
+            Save Network Settings
+          </Button>
+
+          <Button
+            variant="secondary"
+            onClick={handleTestNetwork}
+            loading={testingNetwork}
+            loadingText="Testing..."
+          >
+            Test connection
+          </Button>
 
           <div>
             <label className="block text-sm text-body mb-xs">Health Check Interval</label>
@@ -176,20 +294,51 @@ export function SettingsForm() {
         </div>
       </Card>
 
-      {/* Security */}
       <Card title="Security">
-        <div className="flex items-center gap-xs">
-          <Shield className="w-4 h-4 text-semantic-success" />
-          <span className="text-sm text-ink">
-            Keychain: {keychainAvailable === null ? 'Checking...' : keychainAvailable ? 'Available' : 'Not available'}
-          </span>
+        <div className="space-y-md">
+          <div className="flex items-center gap-xs">
+            <Shield className="w-4 h-4 text-semantic-success" />
+            <span className="text-sm text-ink">
+              Keychain: {keychainAvailable === null ? 'Checking...' : keychainAvailable ? 'Available' : 'Not available'}
+            </span>
+          </div>
+          <p className="text-small text-muted">
+            API keys are stored securely in the OS keychain when available and never appear in config files.
+          </p>
+
+          {mtlsStatus && (
+            <div className="border-t border-hairline pt-md space-y-sm">
+              <p className="text-sm font-medium text-ink">Admin mTLS (optional)</p>
+              <p className="text-small text-muted">
+                Separate HTTPS listener on port {mtlsStatus.port} for /admin only.
+                Certificates: {mtlsStatus.certDir}
+              </p>
+              <p className="text-small text-muted font-mono">
+                Generate: bash {mtlsStatus.generateScript}
+              </p>
+              <div className="flex items-center gap-md">
+                <label className="flex items-center gap-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={mtlsStatus.enabled}
+                    disabled={savingMtls || (!mtlsStatus.ready && !mtlsStatus.enabled)}
+                    onChange={(e) => handleToggleMtls(e.target.checked)}
+                    className="w-4 h-4 rounded border-hairline text-primary focus:ring-primary"
+                  />
+                  <span className="text-sm text-body">
+                    Enable mTLS admin
+                    {!mtlsStatus.ready && !mtlsStatus.enabled ? ' (certs missing)' : ''}
+                  </span>
+                </label>
+                {mtlsStatus.ready && (
+                  <span className="text-small text-semantic-success">Certs ready</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
-        <p className="text-small text-muted mt-xs">
-          API keys are stored securely in macOS Keychain and never appear in config files.
-        </p>
       </Card>
 
-      {/* Thinking Control */}
       {thinkingConfig && (
         <Card title={
           <span className="flex items-center gap-xs">
@@ -234,7 +383,6 @@ export function SettingsForm() {
         </Card>
       )}
 
-      {/* Response Cache */}
       {cacheConfig && (
         <Card title={
           <span className="flex items-center gap-xs">
@@ -285,7 +433,6 @@ export function SettingsForm() {
         </Card>
       )}
 
-      {/* About */}
       <Card title="About">
         <p className="text-body">ClaudeCode Proxy v{appVersion}</p>
         <p className="text-small text-muted mt-xs">
@@ -313,15 +460,6 @@ export function SettingsForm() {
           )}
         </div>
       </Card>
-
-      <Button
-        variant="primary"
-        onClick={handleSave}
-        loading={saving}
-        loadingText="Saving..."
-      >
-        Save Settings
-      </Button>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { fetchRoutes, saveRoutes, fetchProviders, fetchAutoCompactThreshold, saveAutoCompactThreshold } from '@/lib/api';
+import { fetchRoutes, saveRoutes, fetchProviders, fetchAutoCompactThreshold, saveAutoCompactThreshold, fetchAllProviderHealth, type ProviderHealthResult } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -40,19 +40,33 @@ export function ModelMappingForm() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [subagentModel, setSubagentModel] = useState('');
   const [autoCompactThreshold, setAutoCompactThreshold] = useState(0.7);
+  const [autoCompactMode, setAutoCompactMode] = useState<'suggest' | 'trigger'>('suggest');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [providerHealth, setProviderHealth] = useState<Record<string, ProviderHealthResult>>({});
 
   useEffect(() => {
     loadData();
   }, []);
 
+  useEffect(() => {
+    void fetchAllProviderHealth()
+      .then((data) => {
+        const map: Record<string, ProviderHealthResult> = {};
+        for (const p of data.providers) map[p.providerId] = p;
+        setProviderHealth(map);
+      })
+      .catch(() => {});
+  }, [providers]);
+
   async function loadData() {
     try {
+      setLoadError(null);
       const [routesData, providersData, compactData] = await Promise.all([
         fetchRoutes(),
         fetchProviders(),
-        fetchAutoCompactThreshold().catch(() => ({ threshold: 0.7 })),
+        fetchAutoCompactThreshold().catch(() => ({ threshold: 0.7, mode: 'suggest' as const })),
       ]);
 
       const routeList = routesData.routes ?? [];
@@ -65,8 +79,11 @@ export function ModelMappingForm() {
       setProviders(providersData);
       setSubagentModel(routesData.subagentModel || '');
       setAutoCompactThreshold(compactData.threshold ?? 0.7);
-    } catch {
-      // Use defaults on error
+      setAutoCompactMode(compactData.mode ?? 'suggest');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load routes';
+      setLoadError(msg);
+      toast(msg, 'error');
     } finally {
       setLoading(false);
     }
@@ -88,6 +105,23 @@ export function ModelMappingForm() {
     );
   }
 
+  function healthBadge(providerName: string) {
+    if (!providerName) return null;
+    const h = providerHealth[providerName];
+    if (!h) return null;
+    const colors = {
+      healthy: 'bg-semantic-success/15 text-semantic-success',
+      degraded: 'bg-yellow-500/15 text-yellow-700',
+      unhealthy: 'bg-semantic-error/15 text-semantic-error',
+    };
+    const label = h.circuitState === 'open' ? 'circuit open' : h.status;
+    return (
+      <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${colors[h.status]}`}>
+        {label}
+      </span>
+    );
+  }
+
   function getModelsForProvider(providerName: string): string[] {
     const provider = providers.find(p => p.name === providerName);
     return provider?.models || [];
@@ -98,7 +132,7 @@ export function ModelMappingForm() {
     try {
       await Promise.all([
         saveRoutes(routes, subagentModel || undefined),
-        saveAutoCompactThreshold(autoCompactThreshold),
+        saveAutoCompactThreshold(autoCompactThreshold, autoCompactMode),
       ]);
       toast('Settings saved', 'success');
     } catch {
@@ -134,12 +168,15 @@ export function ModelMappingForm() {
 
                 <div className="flex-1 space-y-xs">
                   <label className="block text-small text-muted">Provider</label>
-                  <Select
-                    value={route.providerName}
-                    onChange={(v) => updateRoute(route.claudeTier, 'providerName', v)}
-                    placeholder="Select provider..."
-                    options={providers.filter(p => p.enabled).map(p => ({ value: p.name, label: p.name }))}
-                  />
+                  <div className="flex items-center">
+                    <Select
+                      value={route.providerName}
+                      onChange={(v) => updateRoute(route.claudeTier, 'providerName', v)}
+                      placeholder="Select provider..."
+                      options={providers.filter(p => p.enabled).map(p => ({ value: p.name, label: p.name }))}
+                    />
+                    {healthBadge(route.providerName)}
+                  </div>
                 </div>
 
                 <div className="flex-1 space-y-xs">
@@ -169,13 +206,26 @@ export function ModelMappingForm() {
           Optional model for subagent/Task requests. Applied when the system prompt indicates a subagent invocation.
         </p>
         <Select
-          value={subagentModel}
-          onChange={setSubagentModel}
+          value={
+            subagentModel
+              ? providers.flatMap((p) =>
+                  p.models.map((m) => ({ key: `${p.name}:${m}`, model: m })),
+                ).find((o) => o.model === subagentModel)?.key ?? subagentModel
+              : ''
+          }
+          onChange={(v) => {
+            if (!v) {
+              setSubagentModel('');
+              return;
+            }
+            const idx = v.indexOf(':');
+            setSubagentModel(idx >= 0 ? v.slice(idx + 1) : v);
+          }}
           placeholder="Same as tier routing (default)"
           options={[
             { value: '', label: '— Use tier routing —' },
             ...providers.flatMap((p) =>
-              p.models.map((m) => ({ value: m, label: `${p.name}: ${m}` })),
+              p.models.map((m) => ({ value: `${p.name}:${m}`, label: `${p.name}: ${m}` })),
             ),
           ]}
         />
@@ -184,10 +234,10 @@ export function ModelMappingForm() {
       {/* Auto-compact threshold */}
       <Card title="Auto Compact" className="mt-lg">
         <p className="text-body text-muted mb-md">
-          When context usage reaches this percentage, the proxy will suggest compacting
-          the conversation to avoid hitting the context limit.
+          When context usage reaches this percentage, the proxy hook will suggest or trigger
+          <code className="font-mono text-small mx-1">/compact</code> via PostToolUse.
         </p>
-        <div className="flex items-center gap-md">
+        <div className="flex items-center gap-md mb-md">
           <input
             type="range"
             min={0.3}
@@ -200,6 +250,36 @@ export function ModelMappingForm() {
           <span className="font-mono text-sm text-ink w-16 text-right">
             {Math.round(autoCompactThreshold * 100)}%
           </span>
+        </div>
+        <div className="flex gap-sm">
+          <button
+            type="button"
+            onClick={() => setAutoCompactMode('suggest')}
+            className={`flex-1 rounded-md border px-md py-sm text-small transition-colors ${
+              autoCompactMode === 'suggest'
+                ? 'border-primary bg-primary/10 text-ink font-medium'
+                : 'border-hairline text-muted hover:bg-canvas-soft'
+            }`}
+          >
+            Suggest
+            <span className="block text-[11px] font-normal mt-0.5 opacity-80">
+              Injects context hint
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAutoCompactMode('trigger')}
+            className={`flex-1 rounded-md border px-md py-sm text-small transition-colors ${
+              autoCompactMode === 'trigger'
+                ? 'border-primary bg-primary/10 text-ink font-medium'
+                : 'border-hairline text-muted hover:bg-canvas-soft'
+            }`}
+          >
+            Trigger
+            <span className="block text-[11px] font-normal mt-0.5 opacity-80">
+              Blocks until /compact (5m cooldown)
+            </span>
+          </button>
         </div>
       </Card>
 

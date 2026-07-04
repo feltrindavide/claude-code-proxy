@@ -10,30 +10,52 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { rateLimiterService } from '../services/rateLimiter.js';
-import { resolveRequest } from '../services/route-resolver.js';
+
+/** Wait until the response completes so maxConcurrent limits in-flight upstream work. */
+function waitForResponseEnd(res: Response): Promise<void> {
+  if (res.writableFinished) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const done = () => {
+      res.removeListener('finish', done);
+      res.removeListener('close', done);
+      res.removeListener('error', onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      res.removeListener('finish', done);
+      res.removeListener('close', done);
+      res.removeListener('error', onError);
+      reject(err);
+    };
+    res.once('finish', done);
+    res.once('close', done);
+    res.once('error', onError);
+  });
+}
 
 /**
  * Express middleware that queues POST /v1/messages requests through Bottleneck
  * Skips all other paths and methods
- * Resolves provider name from request body model via providerService.resolveModelRoute
+ * Uses route resolution cached on req by routeResolverMiddleware
  */
 export async function rateLimitMiddleware(
   req: Request,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  // Guard: only apply to POST /v1/messages
   if (req.path !== '/v1/messages' || req.method !== 'POST') {
     return next();
   }
 
-  const { resolution } = resolveRequest((req.body as Record<string, unknown>) || {});
-  const providerName = resolution?.provider.name || 'unknown';
+  const providerName = req.routeResolution?.provider.name || 'unknown';
 
   try {
-    await rateLimiterService.schedule(providerName, () => new Promise<void>((resolve) => {
+    await rateLimiterService.schedule(providerName, () => new Promise<void>((resolve, reject) => {
+      waitForResponseEnd(res).then(resolve).catch(reject);
       next();
-      resolve();
     }));
   } catch (err) {
     console.error('[RateLimit] Queue error:', err);
