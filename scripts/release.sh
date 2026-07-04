@@ -5,7 +5,7 @@
 set -e
 
 APP_NAME="ClaudeCode Proxy"
-VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | grep -oP '\d+\.\d+\.\d+')
+VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1)
 echo "=== Building $APP_NAME v$VERSION ==="
 
 # 1. Build the app

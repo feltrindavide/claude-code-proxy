@@ -5,7 +5,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { configService } from '../services/config.js';
-import { resolveBindHost } from './network.js';
+import { resolveBindHost } from '../services/network.js';
 
 export function lanProxyAuthMiddleware(
   req: Request,
