@@ -14,7 +14,7 @@
  */
 
 import { Router, json as expressJson } from 'express';
-import { configService } from '../services/config.js';
+import { configService, providerNameSchema, urlSchema, modelNameSchema } from '../services/config.js';
 import { setKey, getKey, hasKey, deleteKey } from '../services/keychain.js';
 import { providerService } from '../services/provider.js';
 import { providerValidatorService } from '../services/provider-validator.js';
@@ -70,20 +70,22 @@ router.get('/auth/bootstrap', (req, res) => {
 
 router.use(adminAuthMiddleware);
 
-// Input validation schemas
+// Input validation schemas — aligned with configService (same rules as disk persistence)
 const providerSchema = z.object({
-  name: z.string().min(1).max(50),
-  baseUrl: z.string().url(),
-  keyId: z.string().min(1).max(50),
-  models: z.array(z.string()),
+  name: providerNameSchema,
+  baseUrl: urlSchema,
+  keyId: providerNameSchema,
+  providerType: z.string().min(1).max(50).optional(),
+  models: z.array(modelNameSchema),
   enabled: z.boolean(),
   priority: z.number().int().min(0).max(100),
+  autoDiscovered: z.boolean().optional(),
 });
 
 const routeSchema = z.object({
   claudeTier: z.enum(['opus', 'sonnet', 'haiku']),
-  providerName: z.string().min(1),
-  targetModel: z.string().min(1),
+  providerName: providerNameSchema,
+  targetModel: modelNameSchema,
 });
 
 // Rate limit validation schema (T-05-03: enforces 1-1000 RPM range)
@@ -151,6 +153,9 @@ router.put('/config', (req, res) => {
  */
 router.get('/providers', async (req, res) => {
   try {
+    const config = configService.load();
+    providerService.reload(config.providers, config.routes);
+
     const providers = providerService.getProviders();
     
     // For each provider, mask the key for display
@@ -183,48 +188,40 @@ router.get('/providers', async (req, res) => {
 router.post('/providers', async (req, res) => {
   try {
     const { name, baseUrl, keyId, models, apiKey, enabled, priority } = req.body;
-    
-    // Validate input
-    const parse = providerSchema.safeParse({ name, baseUrl, keyId, models, enabled, priority });
-    if (!parse.success) {
-      return res.status(400).json({ error: parse.error.errors });
-    }
-    
-    // Store actual key in Keychain (D-08, D-09)
-    if (apiKey) {
-      await setKey(name, apiKey);
-    }
-    
-    // Register provider (keyId stored in config, not actual key per D-14)
-    providerService.registerProvider({
-      name,
-      baseUrl,
-      keyId: name, // Use provider name as keyId for simplicity
-      providerType: req.body.providerType, // Store adapter type if provided
-      models: models || [],
-      enabled: enabled ?? true,
-      priority: priority ?? 1,
-    });
 
-    // Persist to config.json so providers survive restarts
-    const config = configService.load();
-    // Update or add provider in config
-    const existingIndex = config.providers.findIndex(p => p.name === name);
     const providerEntry = {
       name,
       baseUrl,
-      keyId: name,
+      keyId: keyId || name,
       providerType: req.body.providerType,
       models: models || [],
       enabled: enabled ?? true,
       priority: priority ?? 1,
     };
+
+    const parse = providerSchema.safeParse(providerEntry);
+    if (!parse.success) {
+      return res.status(400).json({
+        error: parse.error.errors.map((e) => e.message).join(', '),
+      });
+    }
+
+    // Store actual key in Keychain (D-08, D-09)
+    if (apiKey) {
+      await setKey(name, apiKey);
+    }
+
+    // Persist to config.json first — avoid ghost providers in memory if save fails
+    const config = configService.load();
+    const existingIndex = config.providers.findIndex((p) => p.name === name);
     if (existingIndex >= 0) {
       config.providers[existingIndex] = providerEntry;
     } else {
       config.providers.push(providerEntry);
     }
     configService.save(config);
+
+    providerService.registerProvider(providerEntry);
 
     // Sync context registry with updated models (usa providerService, non config.json)
     contextRegistry.syncFromConfig(providerService.getProviders());
@@ -260,7 +257,8 @@ router.post('/providers', async (req, res) => {
     });
   } catch (error) {
     console.error('[Admin] Error adding provider:', error);
-    res.status(500).json({ error: 'Failed to add provider' });
+    const message = error instanceof Error ? error.message : 'Failed to add provider';
+    res.status(500).json({ error: message.replace(/^Invalid config: /, '') || 'Failed to add provider' });
   }
 });
 
@@ -273,6 +271,15 @@ router.patch('/providers/:id/models', (req, res) => {
     const { models } = req.body as { models?: unknown };
     if (!Array.isArray(models)) {
       return res.status(400).json({ error: 'models must be an array' });
+    }
+
+    for (const model of models) {
+      const parsed = modelNameSchema.safeParse(model);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: parsed.error.errors.map((e) => e.message).join(', '),
+        });
+      }
     }
 
     const config = configService.load();
@@ -289,7 +296,8 @@ router.patch('/providers/:id/models', (req, res) => {
     res.json({ success: true, models: provider.models });
   } catch (error) {
     console.error('[Admin] Error patching provider models:', error);
-    res.status(500).json({ error: 'Failed to update models' });
+    const message = error instanceof Error ? error.message : 'Failed to update models';
+    res.status(500).json({ error: message.replace(/^Invalid config: /, '') || 'Failed to update models' });
   }
 });
 

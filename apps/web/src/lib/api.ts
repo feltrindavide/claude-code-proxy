@@ -20,6 +20,16 @@ function formatApiError(body: { error?: unknown }): string {
   return 'Request failed';
 }
 
+async function bootstrapAdminToken(): Promise<string> {
+  const response = await fetch(`${getProxyHttpBase()}/admin/auth/bootstrap`, {
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!response.ok) throw new Error('Failed to bootstrap admin token');
+  const data = await response.json() as { token: string };
+  cachedAdminToken = data.token;
+  return cachedAdminToken;
+}
+
 export async function ensureAdminToken(): Promise<string> {
   if (cachedAdminToken) return cachedAdminToken;
 
@@ -29,13 +39,7 @@ export async function ensureAdminToken(): Promise<string> {
     return cachedAdminToken;
   }
 
-  const response = await fetch(`${getProxyHttpBase()}/admin/auth/bootstrap`, {
-    signal: AbortSignal.timeout(3000),
-  });
-  if (!response.ok) throw new Error('Failed to bootstrap admin token');
-  const data = await response.json() as { token: string };
-  cachedAdminToken = data.token;
-  return cachedAdminToken;
+  return bootstrapAdminToken();
 }
 
 export function clearAdminTokenCache(): void {
@@ -50,7 +54,7 @@ async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
 
   if (response.status === 401) {
     clearAdminTokenCache();
-    const retryToken = await ensureAdminToken();
+    const retryToken = await bootstrapAdminToken();
     headers.set('X-Admin-Token', retryToken);
     response = await fetch(url, { ...init, headers });
   }
@@ -284,7 +288,10 @@ export async function saveRoutes(routes: Array<{
     body: JSON.stringify({ routes, subagentModel }),
     signal: AbortSignal.timeout(10000),
   });
-  if (!response.ok) throw new Error('Failed to save routes');
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
   return response.json();
 }
 

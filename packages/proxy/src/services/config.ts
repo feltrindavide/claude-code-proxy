@@ -27,13 +27,24 @@ const providerNameSchema = z.string()
   .max(50)
   .regex(/^[a-zA-Z0-9_-]+$/, 'Provider name must be alphanumeric with dashes/underscores');
 
-// URL schema: https required, localhost allowed
+// URL schema: https required for public hosts; localhost and private LAN HTTP allowed
 const urlSchema = z.string()
   .url()
-  .refine(
-    (url) => url.startsWith('https://') || url.includes('localhost') || url.includes('127.0.0.1'),
-    'URL must be HTTPS or localhost'
-  );
+  .refine((url) => {
+    if (url.startsWith('https://')) return true;
+    if (url.includes('localhost') || url.includes('127.0.0.1')) return true;
+    try {
+      const { protocol, hostname } = new URL(url);
+      if (protocol !== 'http:') return false;
+      if (/^192\.168\./.test(hostname)) return true;
+      if (/^10\./.test(hostname)) return true;
+      if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+      if (hostname.endsWith('.local')) return true;
+    } catch {
+      return false;
+    }
+    return false;
+  }, 'URL must be HTTPS, or HTTP on localhost/private network');
 
 // Model name schema: no injection chars
 const modelNameSchema = z.string()
@@ -46,9 +57,11 @@ const llmProviderSchema = z.object({
   name: providerNameSchema,
   baseUrl: urlSchema,
   keyId: providerNameSchema, // Keychain account name (D-14)
+  providerType: z.string().min(1).max(50).optional(),
   models: z.array(modelNameSchema),
   enabled: z.boolean(),
   priority: z.number().int().min(0).max(100),
+  autoDiscovered: z.boolean().optional(),
 });
 
 // ModelRoute schema
@@ -111,6 +124,8 @@ export const proxyConfigSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof proxyConfigSchema>;
+
+export { providerNameSchema, urlSchema, modelNameSchema, llmProviderSchema, modelRouteSchema };
 
 /**
  * ConfigService — manages proxy configuration persistence

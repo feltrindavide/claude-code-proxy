@@ -130,13 +130,16 @@ export function ModelMappingForm() {
   async function handleSave() {
     setSaving(true);
     try {
+      const completeRoutes = routes.filter(
+        (r) => r.providerName.trim() && r.targetModel.trim(),
+      );
       await Promise.all([
-        saveRoutes(routes, subagentModel || undefined),
+        saveRoutes(completeRoutes, subagentModel || undefined),
         saveAutoCompactThreshold(autoCompactThreshold, autoCompactMode),
       ]);
       toast('Settings saved', 'success');
-    } catch {
-      toast('Failed to save settings', 'error');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Failed to save settings', 'error');
     } finally {
       setSaving(false);
     }

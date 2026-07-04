@@ -64,7 +64,12 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
 
   function validate() {
     const newErrors: Record<string, string> = {};
-    if (!name.trim()) newErrors.name = 'Provider name is required';
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      newErrors.name = 'Provider name is required';
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(trimmedName)) {
+      newErrors.name = 'Use letters, numbers, dashes or underscores only (e.g. openrouter, nvidia-nim)';
+    }
     if (!baseUrl.trim()) {
       newErrors.baseUrl = 'Base URL is required';
     } else {
@@ -158,6 +163,7 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
         onChange={(e) => setName(e.target.value)}
         error={errors.name}
         placeholder="e.g., openrouter"
+        disabled={!!provider}
       />
 
       <div className="space-y-xs">

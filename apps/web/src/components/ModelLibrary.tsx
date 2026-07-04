@@ -65,8 +65,8 @@ export function ModelLibrary() {
       setNewModelInputs(prev => ({ ...prev, [providerName]: '' }));
       toast(`Model "${model}" added`, 'success');
       loadProviders();
-    } catch {
-      toast('Failed to add model', 'error');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Failed to add model', 'error');
     }
   }
 
