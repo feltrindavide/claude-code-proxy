@@ -13,12 +13,13 @@ interface ProviderFormProps {
   onClose: () => void;
 }
 
-const providerTypes = ['OpenRouter', 'OpenCode Zen', 'OpenCode Go', 'Ollama', 'Google Gemini', 'Anthropic', 'DeepSeek', 'Custom'];
+const providerTypes = ['OpenRouter', 'OpenCode Zen', 'OpenCode Go', 'NVIDIA NIM', 'Ollama', 'Google Gemini', 'Anthropic', 'DeepSeek', 'Custom'];
 
 const defaultBaseUrls: Record<string, string> = {
   'OpenRouter': 'https://openrouter.ai/api',
   'OpenCode Zen': 'https://opencode.ai/zen',
   'OpenCode Go': 'https://opencode.ai/zen/go',
+  'NVIDIA NIM': 'https://integrate.api.nvidia.com/v1',
   'Ollama': 'http://localhost:11434',
   'Google Gemini': 'https://generativelanguage.googleapis.com',
   'Anthropic': 'https://api.anthropic.com',
@@ -26,12 +27,31 @@ const defaultBaseUrls: Record<string, string> = {
   'Custom': '',
 };
 
+function getDisplayProviderType(internal?: string): string {
+  const reverse: Record<string, string> = {
+    OpenRouter: 'OpenRouter',
+    openrouter: 'OpenRouter',
+    'opencode-zen': 'OpenCode Zen',
+    'opencode-go': 'OpenCode Go',
+    'nvidia-nim': 'NVIDIA NIM',
+    nvidia: 'NVIDIA NIM',
+    Ollama: 'Ollama',
+    ollama: 'Ollama',
+    'google-gemini': 'Google Gemini',
+    anthropic: 'Anthropic',
+    deepseek: 'DeepSeek',
+    custom: 'Custom',
+    'custom-anthropic': 'Custom',
+  };
+  return reverse[internal || ''] || internal || 'Custom';
+}
+
 export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
   const { toast } = useToast();
   const [name, setName] = useState(provider?.name || '');
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || '');
   const [apiKey, setApiKey] = useState(provider ? '••••••••' : '');
-  const [providerType, setProviderType] = useState(provider?.providerType || 'Custom');
+  const [providerType, setProviderType] = useState(getDisplayProviderType(provider?.providerType));
   const [apiFormat, setApiFormat] = useState<'openai' | 'anthropic'>('openai');
   const [showKey, setShowKey] = useState(false);
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
@@ -66,6 +86,7 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
       'OpenRouter': 'OpenRouter',
       'OpenCode Zen': 'opencode-zen',
       'OpenCode Go': 'opencode-go',
+      'NVIDIA NIM': 'nvidia-nim',
       'Ollama': 'Ollama',
       'Google Gemini': 'google-gemini',
       'Anthropic': 'anthropic',

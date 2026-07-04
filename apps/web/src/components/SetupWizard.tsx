@@ -34,6 +34,14 @@ const PRESETS = [
     defaultName: 'openrouter',
   },
   {
+    id: 'nvidia-nim',
+    label: 'NVIDIA NIM',
+    description: 'NVIDIA hosted or self-hosted NIM (OpenAI-compatible)',
+    providerType: 'nvidia-nim',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultName: 'nvidia-nim',
+  },
+  {
     id: 'ollama',
     label: 'Ollama',
     description: 'Local models on your machine',
@@ -97,18 +105,29 @@ export function SetupWizard() {
           setHaikuModel(imported.added.find((m) => m.includes(':free')) || imported.added[0]);
         }
         toast(`Imported ${imported.added.length} free models`, 'success');
-      } else if (preset === 'ollama') {
+      } else if (preset === 'nvidia-nim' || preset === 'ollama') {
         try {
           const scanned = await scanProviderModels(providerName.trim());
           setModels(scanned.models);
           if (scanned.models[0]) {
             setOpusModel(scanned.models[0]);
             setSonnetModel(scanned.models[1] || scanned.models[0]);
-            setHaikuModel(scanned.models[2] || scanned.models[0]);
+            setHaikuModel(
+              preset === 'nvidia-nim'
+                ? scanned.models.find((m) => m.includes('nemotron') || m.includes('llama'))
+                    || scanned.models[2]
+                    || scanned.models[0]
+                : scanned.models[2] || scanned.models[0],
+            );
           }
-          toast(`Found ${scanned.models.length} local models`, 'success');
+          toast(`Found ${scanned.models.length} models`, 'success');
         } catch {
-          toast('Could not scan Ollama models — enter manually', 'warning');
+          toast(
+            preset === 'ollama'
+              ? 'Could not scan Ollama models — enter manually'
+              : 'Could not scan NVIDIA NIM models — enter manually',
+            'warning',
+          );
         }
       }
 

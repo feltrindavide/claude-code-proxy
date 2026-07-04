@@ -11,6 +11,7 @@ import { OpenRouterAdapter } from './openrouter.js';
 import { OpenCodeAdapter } from './opencode.js';
 import { OllamaAdapter } from './ollama.js';
 import { CustomAdapter } from './custom.js';
+import { NvidiaNimAdapter } from './nvidia-nim.js';
 import { upstreamFetch } from '../services/upstream-http.js';
 import { providerService } from '../services/provider.js';
 
@@ -136,3 +137,6 @@ registerAdapter(new (class extends OpenCodeAdapter {
   readonly providerType = 'deepseek';
   // Uses default OpenCodeAdapter: /v1/chat/completions
 })());
+
+// NVIDIA NIM (OpenAI-compatible at /v1/chat/completions)
+registerAdapter(new NvidiaNimAdapter());

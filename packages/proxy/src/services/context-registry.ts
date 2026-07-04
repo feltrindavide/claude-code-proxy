@@ -46,8 +46,16 @@ const KNOWN_CONTEXTS: Record<string, { context: number; max_output: number }> = 
   // === Inclusion AI ===
   'inclusionai/ring-2.6-1t:free': { context: 262_144, max_output: 65_536 },
   'ring-2.6-1t-free': { context: 262_144, max_output: 65_536 },
-  // === NVIDIA ===
+  // === NVIDIA NIM ===
   'nvidia/nemotron-3-super-120b-a12b:free': { context: 262_144, max_output: 262_144 },
+  'nvidia/nemotron-3-ultra-550b-a55b': { context: 262_144, max_output: 131_072 },
+  'nvidia/nemotron-4-340b-instruct': { context: 131_072, max_output: 131_072 },
+  'nvidia/nemotron-4-340b-reward': { context: 131_072, max_output: 131_072 },
+  'meta/llama-3.3-70b-instruct': { context: 131_072, max_output: 131_072 },
+  'meta/llama-3.1-405b-instruct': { context: 131_072, max_output: 131_072 },
+  'meta/llama-3.1-70b-instruct': { context: 131_072, max_output: 131_072 },
+  'meta/llama-3.1-8b-instruct': { context: 131_072, max_output: 131_072 },
+  'mistralai/mistral-large-2-instruct': { context: 131_072, max_output: 131_072 },
   'nemotron-3-super-free': { context: 262_144, max_output: 262_144 },
   // === OpenRouter ===
   'openrouter/owl-alpha': { context: 1_048_756, max_output: 262_144 },

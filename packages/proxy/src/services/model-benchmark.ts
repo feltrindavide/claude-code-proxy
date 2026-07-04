@@ -6,6 +6,7 @@ import { getOrCreateAdapter } from '../adapters/index.js';
 import { getKey } from './keychain.js';
 import { providerService } from './provider.js';
 import { upstreamFetch } from './upstream-http.js';
+import { joinProviderUrl } from './provider-url.js';
 import { estimateOutputTokens } from './token-counter.js';
 import type { ClaudeTier } from '../types/index.js';
 
@@ -84,7 +85,7 @@ export async function runModelBenchmark(req: BenchmarkRequest): Promise<Benchmar
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), adapter.timeouts.nonStreaming);
 
-    const response = await upstreamFetch(`${provider.baseUrl}${adapter.apiPath}`, {
+    const response = await upstreamFetch(joinProviderUrl(provider.baseUrl, adapter.apiPath), {
       method: 'POST',
       headers: adapter.buildHeaders(apiKey || '', { streaming: false }),
       body: JSON.stringify(body),

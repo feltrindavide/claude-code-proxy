@@ -32,6 +32,7 @@ import { configService } from './services/config.js';
 import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlockTracker } from './services/thinking-filter.js';
 import { resolveRequest } from './services/route-resolver.js';
 import { upstreamFetch } from './services/upstream-http.js';
+import { joinProviderUrl } from './services/provider-url.js';
 import { registerActiveStream } from './services/shutdown.js';
 import { rateLimiterService } from './services/rateLimiter.js';
 import { proxyCacheHitsTotal, proxyExperimentRequestsTotal } from './metrics/prometheus.js';
@@ -296,7 +297,7 @@ export async function handleProxyRequest(
 
             try {
               return await upstreamFetch(
-                `${resolution!.provider.baseUrl}${adapter!.apiPath}`,
+                joinProviderUrl(resolution!.provider.baseUrl, adapter!.apiPath),
                 {
                   method: 'POST',
                   headers: adapter!.buildHeaders(resolvedApiKey, {
