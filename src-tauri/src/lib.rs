@@ -447,10 +447,10 @@ fn toggle_window(app: &tauri::AppHandle, _tray: &tauri::tray::TrayIcon) {
         } else {
             let cursor_pos = window.cursor_position().ok();
             let popup_pos = match cursor_pos {
-                Some(c) => tauri::PhysicalPosition::new((c.x as i32 - 160).max(10), 30),
+                Some(c) => tauri::PhysicalPosition::new((c.x as i32 - 240).max(10), 30),
                 None => tauri::PhysicalPosition::new(100, 30),
             };
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(350, 330)));
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(480, 180)));
             let _ = window.set_position(tauri::Position::Physical(popup_pos));
             let _ = window.show();
             let _ = window.set_focus();

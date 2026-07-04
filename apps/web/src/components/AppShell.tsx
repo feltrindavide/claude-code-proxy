@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './Sidebar';
 import { fetchOnboardingStatus, checkHealth } from '@/lib/api';
+import { isRoute } from '@/lib/routes';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -16,7 +17,7 @@ function OnboardingGate() {
   const [proxyOffline, setProxyOffline] = useState(false);
 
   useEffect(() => {
-    if (pathname === '/setup') {
+    if (isRoute(pathname, '/setup') || isRoute(pathname, '/popup')) {
       setChecking(false);
       return;
     }
@@ -42,7 +43,7 @@ function OnboardingGate() {
     })();
   }, [pathname, router]);
 
-  if (checking && pathname !== '/setup') {
+  if (checking && !isRoute(pathname, '/setup') && !isRoute(pathname, '/popup')) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80">
         <p className="text-body text-muted">Checking setup…</p>
@@ -50,7 +51,7 @@ function OnboardingGate() {
     );
   }
 
-  if (proxyOffline && pathname !== '/setup') {
+  if (proxyOffline && !isRoute(pathname, '/setup') && !isRoute(pathname, '/popup')) {
     return (
       <div className="bg-amber-500/10 border-b border-amber-500/30 px-lg py-sm text-sm text-amber-800 dark:text-amber-200">
         Proxy offline — start the proxy to complete setup or manage routes.
@@ -63,7 +64,12 @@ function OnboardingGate() {
 
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
-  const isSetup = pathname === '/setup';
+  const isSetup = isRoute(pathname, '/setup');
+  const isPopup = isRoute(pathname, '/popup');
+
+  if (isPopup) {
+    return <>{children}</>;
+  }
 
   return (
     <>

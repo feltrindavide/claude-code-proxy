@@ -7,8 +7,8 @@ interface RouteEntry { claudeTier: string; providerName: string; targetModel: st
 
 const TIERS = [
   { tier: 'opus', label: 'Opus', color: '#ff9f0a' },
-  { tier: 'sonnet', label: 'Sonnet', color: '#5ac8fa' },
-  { tier: 'haiku', label: 'Haiku', color: '#34c759' },
+  { tier: 'sonnet', label: 'Son', color: '#5ac8fa' },
+  { tier: 'haiku', label: 'Hai', color: '#34c759' },
 ];
 
 function openUrl(url: string) {
@@ -55,56 +55,42 @@ export default function PopupPage() {
   const getRoute = (t: string) => routes.find(r => r.claudeTier === t);
   const getModels = (t: string) => providers.find(p => p.name === getRoute(t)?.providerName)?.models || [];
 
+  const statusLabel = status === 'running'
+    ? `:${health?.port || '3456'}`
+    : status === 'loading' ? '…' : 'off';
+
   return (
     <div style={{
       fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
-      background: 'var(--color-canvas)', color: 'var(--color-ink)', width: 350,
-      padding: '14px 16px 12px 16px', margin: 0,
+      background: 'var(--color-canvas)', color: 'var(--color-ink)',
+      width: '100%', boxSizing: 'border-box',
+      padding: '4px 10px', margin: 0,
       overflow: 'hidden', userSelect: 'none',
     }}>
       <style>{`
-        body { margin: 0; padding: 0; background: var(--color-canvas); border-radius: 10px; overflow: hidden; font-family: 'JetBrains Mono', 'SF Mono', monospace; }
+        body { margin: 0; padding: 0; background: var(--color-canvas); border-radius: 10px; overflow: hidden; }
         select {
-          font-family: 'JetBrains Mono', 'SF Mono', monospace;
-          font-size: 11px; font-weight: 400;
+          font-family: inherit;
+          font-size: 10px;
           background: var(--color-surface-card); color: var(--color-ink);
-          border: 1px solid var(--color-hairline-strong); border-radius: 6px;
-          padding: 4px 28px 4px 8px; outline: none; cursor: pointer;
-          min-height: 26px; transition: border-color 0.15s;
-          appearance: none;
-          -webkit-appearance: none;
+          border: 1px solid var(--color-hairline-strong); border-radius: 5px;
+          padding: 2px 18px 2px 5px; outline: none; cursor: pointer;
+          min-height: 20px; width: 100%;
+          appearance: none; -webkit-appearance: none;
           background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23807d72' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
-          background-position: right 0.4rem center;
+          background-position: right 0.25rem center;
           background-repeat: no-repeat;
-          background-size: 1rem;
+          background-size: 0.75rem;
         }
-        select:hover { border-color: var(--color-muted); }
-        select:focus { border-color: var(--color-primary); box-shadow: 0 0 0 1.5px var(--color-primary); }
-        select option { background: var(--color-surface-card); color: var(--color-ink); padding: 4px; font-family: 'JetBrains Mono', 'SF Mono', monospace; }
-        button { font-family: 'JetBrains Mono', 'SF Mono', monospace; }
+        select:focus { border-color: var(--color-primary); }
+        button { font-family: inherit; }
       `}</style>
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 22, height: 22, borderRadius: 5, background: '#f54e00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12, color: 'white' }}>C</div>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>ClaudeCode Proxy</span>
-        </div>
-        <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, fontWeight: 500,
-          background: status === 'running' ? 'rgba(31,138,101,0.15)' : 'var(--color-surface-strong)',
-          color: status === 'running' ? 'var(--color-semantic-success)' : 'var(--color-muted)' }}>
-          {status === 'running' ? 'Running' : 'Stopped'}
-        </span>
-      </div>
-
-      {/* Status */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--color-hairline-soft)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 10, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Proxy</div>
-          <div style={{ fontSize: 13, fontFamily: 'monospace', fontWeight: 500, marginTop: 2, color: 'var(--color-ink)' }}>
-            {status === 'running' ? `Running on port ${health?.port || '3456'}` : 'Not running'}
-          </div>
-        </div>
+      {/* Header + proxy control */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+        <div style={{ width: 16, height: 16, borderRadius: 3, background: '#f54e00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 9, color: 'white', flexShrink: 0 }}>C</div>
+        <span style={{ fontSize: 11, fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>ClaudeCode Proxy</span>
+        <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--color-muted)', flexShrink: 0 }}>{statusLabel}</span>
         <button onClick={async () => {
           setStatus('loading');
           const t = (window as any).__TAURI__;
@@ -114,30 +100,34 @@ export default function PopupPage() {
           } catch {}
           setTimeout(refresh, 2000);
         }}
-          style={{ padding: '5px 16px', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 500,
+          style={{ padding: '2px 8px', border: 'none', borderRadius: 4, fontSize: 9, fontWeight: 600, flexShrink: 0,
             cursor: 'pointer', background: status === 'running' ? 'rgba(207,45,86,0.12)' : 'var(--color-primary)',
             color: status === 'running' ? 'var(--color-semantic-error)' : 'var(--color-on-primary)' }}>
-          {status === 'loading' ? '...' : status === 'running' ? 'Stop' : 'Start'}
+          {status === 'loading' ? '…' : status === 'running' ? 'Stop' : 'Start'}
         </button>
       </div>
 
       {/* Model Mapping */}
-      <div style={{ background: 'var(--color-hairline-soft)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
-        <div style={{ fontSize: 10, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Model Mapping</div>
-        {TIERS.map(t => {
+      <div style={{ background: 'var(--color-hairline-soft)', borderRadius: 5, padding: '4px 6px', marginBottom: 4 }}>
+        <div style={{ fontSize: 8, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 2 }}>Mapping</div>
+        {TIERS.map((t, i) => {
           const route = getRoute(t.tier);
           const models = getModels(t.tier);
           return (
-            <div key={t.tier} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 5 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 12, color: '#8e8e93', width: 48, flexShrink: 0 }}>{t.label}</span>
-              <select value={route?.providerName || ''} onChange={e => updateRoute(t.tier, 'providerName', e.target.value)}
-                style={{ flex: 1, minWidth: 0, marginRight: 4 }}>
-                <option value="">Provider</option>
+            <div key={t.tier} style={{
+              display: 'grid',
+              gridTemplateColumns: '6px 28px 1fr 1.15fr',
+              alignItems: 'center',
+              columnGap: 3,
+              marginBottom: i === TIERS.length - 1 ? 0 : 2,
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: t.color }} />
+              <span style={{ fontSize: 10, color: 'var(--color-muted)' }}>{t.label}</span>
+              <select value={route?.providerName || ''} onChange={e => updateRoute(t.tier, 'providerName', e.target.value)}>
+                <option value="">Prov</option>
                 {providers.filter(p => p.enabled).map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
-              <select value={route?.targetModel || ''} onChange={e => updateRoute(t.tier, 'targetModel', e.target.value)}
-                style={{ flex: 1.3, minWidth: 0 }}>
+              <select value={route?.targetModel || ''} onChange={e => updateRoute(t.tier, 'targetModel', e.target.value)}>
                 <option value="">Model</option>
                 {models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -146,25 +136,20 @@ export default function PopupPage() {
         })}
       </div>
 
-      {/* Discovery status */}
       {discoveredCount > 0 && (
-        <div style={{
-          background: 'rgba(90,200,250,0.08)', borderRadius: 8, padding: '8px 12px', marginBottom: 10,
-          fontSize: 11, color: 'var(--color-muted)',
-        }}>
-          {discoveredCount} local provider{discoveredCount !== 1 ? 's' : ''} auto-detected
+        <div style={{ fontSize: 9, color: 'var(--color-muted)', marginBottom: 3, paddingLeft: 2 }}>
+          {discoveredCount} local provider{discoveredCount !== 1 ? 's' : ''} detected
         </div>
       )}
 
-      {/* Buttons */}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 5 }}>
         <button onClick={() => openUrl('http://localhost:3457')}
-          style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
+          style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Dashboard
         </button>
         <button onClick={() => openUrl('http://localhost:3457/settings')}
-          style={{ flex: 1, padding: 8, border: '1px solid var(--color-hairline-strong)', borderRadius: 6, fontSize: 12, fontWeight: 500,
+          style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Settings
         </button>
