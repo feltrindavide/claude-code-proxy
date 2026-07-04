@@ -1,6 +1,6 @@
 [package]
 name = "claudecode-proxy-app"
-version = "0.4.1"
+version = "0.5.0"
 description = "Claude Code Proxy — Route Claude Code through optimal providers"
 authors = []
 edition = "2021"
