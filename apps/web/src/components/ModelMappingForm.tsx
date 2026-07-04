@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { fetchRoutes, saveRoutes, fetchProviders } from '@/lib/api';
+import { fetchRoutes, saveRoutes, fetchProviders, fetchAutoCompactThreshold, saveAutoCompactThreshold } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -38,6 +38,7 @@ export function ModelMappingForm() {
   const { toast } = useToast();
   const [routes, setRoutes] = useState<RouteEntry[]>(defaultRoutes);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [subagentModel, setSubagentModel] = useState('');
   const [autoCompactThreshold, setAutoCompactThreshold] = useState(0.7);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -51,10 +52,10 @@ export function ModelMappingForm() {
       const [routesData, providersData, compactData] = await Promise.all([
         fetchRoutes(),
         fetchProviders(),
-        fetch('http://localhost:3456/admin/auto-compact').then(r => r.json()).catch(() => ({ threshold: 0.7 })),
+        fetchAutoCompactThreshold().catch(() => ({ threshold: 0.7 })),
       ]);
 
-      const routeList = Array.isArray(routesData) ? routesData : routesData.routes;
+      const routeList = routesData.routes ?? [];
 
       const merged = defaultRoutes.map((defaultRoute) => {
         const existing = routeList.find((r) => r.claudeTier === defaultRoute.claudeTier);
@@ -62,6 +63,7 @@ export function ModelMappingForm() {
       });
       setRoutes(merged);
       setProviders(providersData);
+      setSubagentModel(routesData.subagentModel || '');
       setAutoCompactThreshold(compactData.threshold ?? 0.7);
     } catch {
       // Use defaults on error
@@ -95,12 +97,8 @@ export function ModelMappingForm() {
     setSaving(true);
     try {
       await Promise.all([
-        saveRoutes(routes),
-        fetch('http://localhost:3456/admin/auto-compact', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ threshold: autoCompactThreshold }),
-        }),
+        saveRoutes(routes, subagentModel || undefined),
+        saveAutoCompactThreshold(autoCompactThreshold),
       ]);
       toast('Settings saved', 'success');
     } catch {
@@ -164,6 +162,24 @@ export function ModelMappingForm() {
           );
         })}
       </div>
+
+      {/* Subagent model override */}
+      <Card title="Subagent Model" className="mt-lg">
+        <p className="text-body text-muted mb-md">
+          Optional model for subagent/Task requests. Applied when the system prompt indicates a subagent invocation.
+        </p>
+        <Select
+          value={subagentModel}
+          onChange={setSubagentModel}
+          placeholder="Same as tier routing (default)"
+          options={[
+            { value: '', label: '— Use tier routing —' },
+            ...providers.flatMap((p) =>
+              p.models.map((m) => ({ value: m, label: `${p.name}: ${m}` })),
+            ),
+          ]}
+        />
+      </Card>
 
       {/* Auto-compact threshold */}
       <Card title="Auto Compact" className="mt-lg">

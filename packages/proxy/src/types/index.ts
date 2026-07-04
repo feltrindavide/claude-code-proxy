@@ -42,6 +42,7 @@ export interface RouteResolution {
   targetModel: string;
   originalModel: string;
   claudeTier?: ClaudeTier; // Added for request log enrichment (04-01)
+  fallbackTier?: boolean;
 }
 
 /**
@@ -51,6 +52,7 @@ export interface RouteResolution {
  */
 export interface RequestLogEntry {
   timestamp: string;
+  requestId?: string;
   requestModel: string;
   claudeTier?: ClaudeTier;
   providerName?: string;

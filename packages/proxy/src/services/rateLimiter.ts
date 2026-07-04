@@ -123,10 +123,12 @@ export class RateLimiterService {
   }
 
   /**
-   * Persist config to disk using atomic write pattern
-   * Ensures directory exists with secure permissions (0o700)
-   * Writes to temp file then renames to final path (atomic on POSIX)
+   * Disconnect all Bottleneck limiters (graceful shutdown).
    */
+  async disconnect(): Promise<void> {
+    await this.group.disconnect(false);
+  }
+
   private persist(): void {
     // Ensure directory exists with secure permissions
     if (!existsSync(CONFIG_DIR)) {

@@ -13,7 +13,7 @@
  *   - PUT /admin/routes → update routes
  */
 
-import { Router } from 'express';
+import { Router, json as expressJson } from 'express';
 import { configService } from '../services/config.js';
 import { setKey, getKey, hasKey, deleteKey } from '../services/keychain.js';
 import { providerService } from '../services/provider.js';
@@ -23,9 +23,31 @@ import { rateLimiterService } from '../services/rateLimiter.js';
 import { validationStoreService } from '../services/validationStore.js';
 import { writeModelEnvFile } from '../services/modelEnv.js';
 import { contextRegistry } from '../services/context-registry.js';
+import { responseCache } from '../services/response-cache.js';
+import { ensureAdminToken, isLocalhostRequest } from '../services/admin-auth.js';
+import { adminAuthMiddleware } from '../middleware/adminAuth.js';
+import { getSessionUsage } from '../services/session-tracker.js';
+import { lastContextUsage, getCurrentSessionUsage } from '../proxy.js';
+import { getDiscoveryService } from '../services/discovery-registry.js';
+import { checkProviderHealth } from '../services/provider-health.js';
+import { getMetricsText } from '../metrics/prometheus.js';
+import { logger } from '../lib/logger.js';
 import { z } from 'zod';
 
 const router = Router();
+
+/**
+ * GET /admin/auth/bootstrap
+ * Returns admin token for localhost clients only (dashboard, hooks).
+ */
+router.get('/auth/bootstrap', (req, res) => {
+  if (!isLocalhostRequest(req)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  res.json({ token: ensureAdminToken() });
+});
+
+router.use(adminAuthMiddleware);
 
 // Input validation schemas
 const providerSchema = z.object({
@@ -266,6 +288,39 @@ router.post('/providers/:id/validate', async (req, res) => {
   } catch (error) {
     console.error('[Admin] Error validating provider:', error);
     res.status(500).json({ error: 'Failed to validate provider' });
+  }
+});
+
+/**
+ * GET /admin/providers/:id/health
+ * Lightweight health probe with cached latency and circuit state.
+ */
+router.get('/providers/:id/health', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const provider = providerService.getProvider(id);
+    if (!provider) {
+      return res.status(404).json({ error: 'Provider not found' });
+    }
+    const health = await checkProviderHealth(provider);
+    res.json(health);
+  } catch (error) {
+    logger.error({ err: error }, 'Provider health check failed');
+    res.status(500).json({ error: 'Failed to check provider health' });
+  }
+});
+
+/**
+ * GET /admin/metrics
+ * Prometheus metrics (admin auth required).
+ */
+router.get('/metrics', async (_req, res) => {
+  try {
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(await getMetricsText());
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to export metrics');
+    res.status(500).json({ error: 'Failed to export metrics' });
   }
 });
 
@@ -622,11 +677,65 @@ router.put('/cache-config', (req, res) => {
     const config = configService.load();
     config.responseCache = req.body;
     configService.save(config);
+    responseCache.reconfigure(req.body);
     res.json({ success: true });
   } catch (error) {
     console.error('[Admin] Error saving cache config:', error);
     res.status(500).json({ error: 'Failed to save cache config' });
   }
+});
+
+/**
+ * GET /admin/context — per-session context usage
+ */
+router.get('/context', (req, res) => {
+  const ctx = contextRegistry.load();
+  const sessionId = req.query.session as string | undefined;
+  const usage = sessionId
+    ? getSessionUsage(sessionId)
+    : getCurrentSessionUsage() || lastContextUsage;
+  res.json({ lastUsage: usage || null, config: ctx });
+});
+
+router.put('/context', expressJson(), (req, res) => {
+  try {
+    const ctx = contextRegistry.load();
+    if (Array.isArray(req.body.models)) {
+      ctx.models = req.body.models;
+    }
+    if (req.body.claude && typeof req.body.claude === 'object') {
+      for (const [tier, context] of Object.entries(req.body.claude)) {
+        if (['opus', 'sonnet', 'haiku'].includes(tier) && typeof context === 'number') {
+          ctx.claude[tier] = context;
+        }
+      }
+    }
+    contextRegistry.save(ctx);
+    res.json({ success: true });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * Discovery admin endpoints
+ */
+router.get('/discovery', (_req, res) => {
+  const discovery = getDiscoveryService();
+  if (!discovery) return res.json({ enabled: false, providers: [] });
+  res.json({
+    enabled: true,
+    config: discovery.getConfig(),
+    providers: discovery.getDiscoveredProviders(),
+  });
+});
+
+router.post('/discovery/scan', async (_req, res) => {
+  const discovery = getDiscoveryService();
+  if (!discovery) return res.status(503).json({ error: 'Discovery not initialized' });
+  await discovery.scan();
+  res.json({ success: true, providers: discovery.getDiscoveredProviders() });
 });
 
 export default router;

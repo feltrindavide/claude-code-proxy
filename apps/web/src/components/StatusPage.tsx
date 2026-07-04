@@ -8,7 +8,8 @@ import { ProviderHealthCard } from '@/components/ProviderHealthCard';
 import { ProxyControls } from '@/components/ProxyControls';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { Network, GitCommit, Clock, Server, ClipboardCopy, Check } from 'lucide-react';
-import { fetchRecentLogs } from '@/lib/api';
+import { useLogStore } from '@/stores/logStore';
+import { useLogStream } from '@/hooks/useLogStream';
 import { useToast } from '@/components/Toast';
 
 export function StatusPage() {
@@ -18,6 +19,8 @@ export function StatusPage() {
   } = useProxyStore();
   const { pollValidation, validationResults } = useHealthStore();
   const { toast } = useToast();
+  const logEntries = useLogStore((s) => s.entries);
+  useLogStream();
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -45,25 +48,12 @@ export function StatusPage() {
   const [lastAckedRetryKey, setLastAckedRetryKey] = useState<string | null>(null);
 
   useEffect(() => {
-    const checkRetries = async () => {
-      try {
-        const logs = await fetchRecentLogs();
-        // Find the most recent entry with retryCount > 0
-        const retryEntry = logs.find((entry) => entry.retryCount && entry.retryCount > 0);
-        if (retryEntry && retryEntry.timestamp !== lastAckedRetryKey) {
-          // New retry event detected — trigger toast
-          toast(`Retrying request (attempt ${retryEntry.retryCount}/2)...`, 'warning');
-          setLastAckedRetryKey(retryEntry.timestamp);
-        }
-      } catch {
-        // Silently ignore poll errors
-      }
-    };
-
-    checkRetries();
-    const interval = setInterval(checkRetries, 5000);
-    return () => clearInterval(interval);
-  }, [lastAckedRetryKey, toast]);
+    const retryEntry = logEntries.find((entry) => entry.retryCount && entry.retryCount > 0);
+    if (retryEntry && retryEntry.timestamp !== lastAckedRetryKey) {
+      toast(`Retrying request (attempt ${retryEntry.retryCount}/2)...`, 'warning');
+      setLastAckedRetryKey(retryEntry.timestamp);
+    }
+  }, [logEntries, lastAckedRetryKey, toast]);
 
   // Compute uptime
   const uptime = startTime

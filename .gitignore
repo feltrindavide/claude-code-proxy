@@ -29,6 +29,17 @@ design/
 .env.local
 .env.*.local
 
+# Project-level config (local only)
+CLAUDE.md
+
+# AgentDB / RuVector session files
+agentdb.rvf
+agentdb.rvf.lock
+ruvector.db
+
+# Knowledge graph (graphify)
+graphify-out/
+
 # IDE
 .vscode/
 .idea/

@@ -4,31 +4,51 @@
  * Plan: 04-02, Task 3
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 describe('Admin export/import routes', () => {
   let app: express.Express;
+  let adminToken: string;
+  let tempHome: string;
+  const originalHome = process.env.HOME;
 
   beforeEach(async () => {
+    tempHome = mkdtempSync(join(tmpdir(), 'ccp-admin-export-'));
+    process.env.HOME = tempHome;
+
     vi.resetModules();
     const { default: adminRouter } = await import('../../src/routes/admin.js');
 
     app = express();
     app.use(express.json());
     app.use('/admin', adminRouter);
+
+    const bootstrap = await request(app).get('/admin/auth/bootstrap');
+    adminToken = bootstrap.body.token;
   });
+
+  afterEach(() => {
+    process.env.HOME = originalHome;
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  function authed(method: 'get' | 'put' | 'post', path: string) {
+    return request(app)[method](path).set('X-Admin-Token', adminToken);
+  }
 
   describe('GET /admin/config/export', () => {
     it('should return masked config with keyId bullet characters', async () => {
-      const response = await request(app).get('/admin/config/export');
+      const response = await authed('get', '/admin/config/export');
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('providers');
       expect(response.body).toHaveProperty('routes');
       expect(response.body).toHaveProperty('settings');
       expect(response.body.settings.port).toBe(3456);
-      // If there are providers, their keyId should be masked
       if (response.body.providers.length > 0) {
         expect(response.body.providers[0].keyId).toBe('••••');
       }
@@ -37,24 +57,21 @@ describe('Admin export/import routes', () => {
 
   describe('POST /admin/config/import', () => {
     it('should reject missing strategy', async () => {
-      const response = await request(app)
-        .post('/admin/config/import')
+      const response = await authed('post', '/admin/config/import')
         .send({ data: {} });
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('data and strategy');
     });
 
     it('should reject invalid strategy', async () => {
-      const response = await request(app)
-        .post('/admin/config/import')
+      const response = await authed('post', '/admin/config/import')
         .send({ data: {}, strategy: 'delete' });
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('data and strategy');
     });
 
     it('should accept valid data with replace strategy', async () => {
-      const response = await request(app)
-        .post('/admin/config/import')
+      const response = await authed('post', '/admin/config/import')
         .send({
           data: {
             providers: [],
@@ -68,8 +85,7 @@ describe('Admin export/import routes', () => {
     });
 
     it('should reject invalid config data', async () => {
-      const response = await request(app)
-        .post('/admin/config/import')
+      const response = await authed('post', '/admin/config/import')
         .send({
           data: { invalid: true },
           strategy: 'replace',
@@ -85,8 +101,7 @@ describe('Admin export/import routes', () => {
         providers: [],
         routes: [{ claudeTier: 'opus', providerName: 'new', targetModel: 'new-model' }],
       };
-      const response = await request(app)
-        .post('/admin/config/diff')
+      const response = await authed('post', '/admin/config/diff')
         .send({ data: incomingData });
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('current');
@@ -95,9 +110,7 @@ describe('Admin export/import routes', () => {
     });
 
     it('should reject missing data', async () => {
-      const response = await request(app)
-        .post('/admin/config/diff')
-        .send({});
+      const response = await authed('post', '/admin/config/diff').send({});
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('data is required');
     });

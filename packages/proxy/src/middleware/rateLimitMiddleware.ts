@@ -10,7 +10,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { rateLimiterService } from '../services/rateLimiter.js';
-import { providerService } from '../services/provider.js';
+import { resolveRequest } from '../services/route-resolver.js';
 
 /**
  * Express middleware that queues POST /v1/messages requests through Bottleneck
@@ -27,8 +27,7 @@ export async function rateLimitMiddleware(
     return next();
   }
 
-  const modelName = (req.body as any)?.model || 'claude-opus-4-20250514';
-  const resolution = providerService.resolveModelRoute(modelName);
+  const { resolution } = resolveRequest((req.body as Record<string, unknown>) || {});
   const providerName = resolution?.provider.name || 'unknown';
 
   try {

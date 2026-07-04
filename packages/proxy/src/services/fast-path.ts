@@ -54,6 +54,28 @@ function minimalJSONResponse(model: string, text: string): object {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: extract system prompt as string
+// ---------------------------------------------------------------------------
+
+function extractSystemString(body: Record<string, unknown>): string {
+  const system = body.system;
+  if (!system) return '';
+  if (typeof system === 'string') return system.toLowerCase();
+  if (Array.isArray(system)) {
+    return system.map((b: { text?: string }) => b.text || '').join(' ').toLowerCase();
+  }
+  return '';
+}
+
+const SUGGESTION_PATTERNS = [
+  'suggest',
+  'autocomplete',
+  'prefix',
+  'tab completion',
+  'inline completion',
+];
+
+// ---------------------------------------------------------------------------
 // Handler: TitleGeneration
 // Claude Code sends a title-generation request at session start.
 // Pattern: system contains "generate a concise title" + max_tokens < 50
@@ -123,6 +145,11 @@ const suggestionModeHandler: FastPathHandler = {
     if (maxTokens === undefined || maxTokens >= 10) return false;
     if (body.stream !== true) return false;
     if (body.tools !== undefined) return false;
+
+    const sysStr = extractSystemString(body);
+    const hasSuggestionPattern = SUGGESTION_PATTERNS.some((p) => sysStr.includes(p));
+    if (!hasSuggestionPattern) return false;
+
     return true;
   },
 

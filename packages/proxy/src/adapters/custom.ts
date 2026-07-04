@@ -31,6 +31,8 @@ import {
   mapStopReason,
   getUserFacingErrorMessage,
 } from '../services/sse-transformer.js';
+import { buildProviderHeaders, type HeaderOptions } from './base-headers.js';
+import { upstreamFetch } from '../services/upstream-http.js';
 
 export class CustomAdapter implements ProviderAdapter {
   readonly providerType: string;
@@ -41,6 +43,10 @@ export class CustomAdapter implements ProviderAdapter {
     const format = options?.apiFormat || 'openai';
     this.providerType = options?.providerType || 'custom';
     this.apiPath = format === 'anthropic' ? '/v1/messages' : '/v1/chat/completions';
+  }
+
+  buildHeaders(apiKey: string, opts: HeaderOptions): Record<string, string> {
+    return buildProviderHeaders(this.providerType, apiKey, opts);
   }
 
   /**
@@ -384,7 +390,7 @@ export class CustomAdapter implements ProviderAdapter {
   async validate(baseUrl: string, apiKey: string): Promise<ValidationResult> {
     try {
       // Try GET /v1/models first
-      const resp = await fetch(`${baseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${baseUrl}/v1/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });
@@ -399,7 +405,7 @@ export class CustomAdapter implements ProviderAdapter {
       }
 
       // Fallback: POST /v1/chat/completions with minimal request
-      const testResp = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const testResp = await upstreamFetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

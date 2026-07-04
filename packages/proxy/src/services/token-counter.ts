@@ -1,36 +1,21 @@
 /**
- * Token counter — utilizza tiktoken per conteggio accurato dei token
- * Invece della stima chars/4, usa l'encoding cl100k_base (stesso di Claude/GPT).
- *
- * Il conteggio è lazy: il primo encode carica l'encoder WASM.
- * FREE sempre dopo l'uso per evitare memory leak WASM.
+ * Token counter — tiktoken cl100k_base with warm encoder and LRU cache.
  */
 
+import crypto from 'crypto';
 import { get_encoding, Tiktoken } from 'tiktoken';
 
-// Cache per evitare di ricaricare l'encoder a ogni richiesta
 let encoder: Tiktoken | null = null;
-let encoderRefCount = 0;
 
-function acquireEncoder(): Tiktoken {
+function getEncoder(): Tiktoken {
   if (!encoder) {
     encoder = get_encoding('cl100k_base');
   }
-  encoderRefCount++;
   return encoder;
 }
 
-function releaseEncoder(): void {
-  encoderRefCount--;
-  if (encoderRefCount <= 0 && encoder) {
-    try { encoder.free(); } catch {}
-    encoder = null;
-    encoderRefCount = 0;
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Tipi Anthropic (stessa shape di AnthropicMessagesBody)
+// Types
 // ---------------------------------------------------------------------------
 
 interface ContentBlock {
@@ -51,8 +36,69 @@ interface ToolLike {
   input_schema?: Record<string, unknown>;
 }
 
+export interface TokenCount {
+  messages: number;
+  system: number;
+  tools: number;
+  total: number;
+}
+
 // ---------------------------------------------------------------------------
-// Conteggio
+// LRU cache (max 200)
+// ---------------------------------------------------------------------------
+
+const CACHE_MAX = 200;
+const tokenCache = new Map<string, TokenCount>();
+
+function cacheGet(key: string): TokenCount | undefined {
+  const v = tokenCache.get(key);
+  if (!v) return undefined;
+  tokenCache.delete(key);
+  tokenCache.set(key, v);
+  return v;
+}
+
+function cacheSet(key: string, value: TokenCount): void {
+  if (tokenCache.has(key)) tokenCache.delete(key);
+  tokenCache.set(key, value);
+  while (tokenCache.size > CACHE_MAX) {
+    const oldest = tokenCache.keys().next().value;
+    if (oldest !== undefined) tokenCache.delete(oldest);
+  }
+}
+
+function canonicalizeMessages(messages: MessageLike[]): unknown[] {
+  return messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+}
+
+function canonicalizeSystem(system?: string | ContentBlock[] | null): string | null {
+  if (!system) return null;
+  if (typeof system === 'string') return system.length > 0 ? system : null;
+  const text = system
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text || '')
+    .join('\n');
+  return text.length > 0 ? text : null;
+}
+
+function buildCacheKey(
+  messages: MessageLike[],
+  system?: string | ContentBlock[] | null,
+  tools?: ToolLike[] | null,
+): string {
+  const payload = {
+    messages: canonicalizeMessages(messages || []),
+    system: canonicalizeSystem(system),
+    tools: tools || null,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+// ---------------------------------------------------------------------------
+// Counting
 // ---------------------------------------------------------------------------
 
 function countText(text: string, enc: Tiktoken): number {
@@ -78,7 +124,7 @@ function countContent(content: string | ContentBlock[], enc: Tiktoken): number {
         if (typeof c === 'string') {
           total += countText(c, enc);
         } else if (Array.isArray(c)) {
-          for (const item of c as any[]) {
+          for (const item of c as ContentBlock[]) {
             if (item?.type === 'text' && item.text) total += countText(item.text, enc);
           }
         }
@@ -100,76 +146,57 @@ function countTools(tools: ToolLike[], enc: Tiktoken): number {
   return total;
 }
 
-// ---------------------------------------------------------------------------
-// API pubblica
-// ---------------------------------------------------------------------------
+function countRequestTokensUncached(
+  messages: MessageLike[],
+  system?: string | ContentBlock[] | null,
+  tools?: ToolLike[] | null,
+): TokenCount {
+  const enc = getEncoder();
+  const msgTokens = Array.isArray(messages)
+    ? messages.reduce((sum, m) => sum + countContent(m.content, enc), 0)
+    : 0;
+  const msgOverhead = Array.isArray(messages) ? messages.length * 3 : 0;
+  const sysTokens = system ? countContent(system, enc) : 0;
+  const toolTokens = tools ? countTools(tools, enc) : 0;
 
-export interface TokenCount {
-  messages: number;
-  system: number;
-  tools: number;
-  total: number;
+  return {
+    messages: msgTokens,
+    system: sysTokens,
+    tools: toolTokens,
+    total: msgTokens + msgOverhead + sysTokens + toolTokens,
+  };
 }
 
 /**
- * Conta i token di una richiesta completa.
- * Include overhead per-messaggio (~3 token per messaggio come da specifica OpenAI).
+ * Count request tokens with LRU cache for repeated identical payloads.
  */
 export function countRequestTokens(
   messages: MessageLike[],
   system?: string | ContentBlock[] | null,
   tools?: ToolLike[] | null,
 ): TokenCount {
-  const enc = acquireEncoder();
-  try {
-    const msgTokens = Array.isArray(messages)
-      ? messages.reduce((sum, m) => sum + countContent(m.content, enc), 0)
-      : 0;
+  const key = buildCacheKey(messages, system, tools);
+  const cached = cacheGet(key);
+  if (cached) return cached;
 
-    // Overhead: ~3 token per messaggio per i meta (role, stop, etc.)
-    const msgOverhead = Array.isArray(messages) ? messages.length * 3 : 0;
-
-    const sysTokens = system
-      ? countContent(system, enc)
-      : 0;
-
-    const toolTokens = tools ? countTools(tools, enc) : 0;
-
-    return {
-      messages: msgTokens,
-      system: sysTokens,
-      tools: toolTokens,
-      total: msgTokens + msgOverhead + sysTokens + toolTokens,
-    };
-  } finally {
-    releaseEncoder();
-  }
+  const result = countRequestTokensUncached(messages, system, tools);
+  cacheSet(key, result);
+  return result;
 }
 
-/**
- * Versione semplice: conta una stringa di testo.
- */
+/** Alias for explicit cache usage. */
+export const countRequestTokensCached = countRequestTokens;
+
 export function countTextTokens(text: string): number {
   if (!text) return 0;
-  const enc = acquireEncoder();
-  try {
-    return enc.encode(text).length;
-  } finally {
-    releaseEncoder();
-  }
+  return getEncoder().encode(text).length;
 }
 
-/**
- * Stima output tokens da una stringa di contenuto.
- * Usa tiktoken invece di chars/4 per maggiore precisione.
- */
 export function estimateOutputTokens(contentText: string): number {
   if (!contentText) return 1;
   try {
-    const tokens = countTextTokens(contentText);
-    return Math.max(1, tokens);
+    return Math.max(1, countTextTokens(contentText));
   } catch {
-    // Fallback chars/4
     return Math.max(1, Math.round(contentText.length / 4));
   }
 }

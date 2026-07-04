@@ -1,18 +1,8 @@
 /**
  * Response cache — in-memory LRU cache for non-streaming responses.
- *
- * Keys are MD5 hashes of the request body (model + messages + tools + system + max_tokens).
- * TTL is short (default 10s) — only useful for retry windows, not long-term caching.
- *
- * Only caches non-streaming responses. Streaming would require buffering the
- * entire response before returning, which defeats the purpose.
  */
 
 import crypto from 'crypto';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface ResponseCacheConfig {
   enabled: boolean;
@@ -26,18 +16,36 @@ const DEFAULT_CONFIG: ResponseCacheConfig = {
   maxEntries: 50,
 };
 
-// ---------------------------------------------------------------------------
-// Cache entry
-// ---------------------------------------------------------------------------
-
 interface CacheEntry {
   data: unknown;
   expiresAt: number;
 }
 
-// ---------------------------------------------------------------------------
-// ResponseCache class
-// ---------------------------------------------------------------------------
+/** Deterministic JSON with sorted object keys. */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => stableStringify(v)).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
+function normalizeSystem(system: unknown): string | null {
+  if (!system) return null;
+  if (typeof system === 'string') return system.length > 0 ? system : null;
+  if (Array.isArray(system)) {
+    const text = system
+      .filter((b: { type?: string }) => b.type === 'text')
+      .map((b: { text?: string }) => b.text || '')
+      .join('\n');
+    return text.length > 0 ? text : null;
+  }
+  return null;
+}
 
 export class ResponseCache {
   private cache = new Map<string, CacheEntry>();
@@ -47,52 +55,47 @@ export class ResponseCache {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
-  /** Update runtime config */
   reconfigure(config: Partial<ResponseCacheConfig>): void {
     this.config = { ...this.config, ...config };
-    // Prune if we're over the new max
     while (this.cache.size > this.config.maxEntries) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
     }
   }
 
-  /** Get current config (for admin API) */
   getConfig(): ResponseCacheConfig {
     return { ...this.config };
   }
 
-  /** Clear all entries */
   clear(): void {
     this.cache.clear();
   }
 
-  /** Build a deterministic cache key from the request body */
   buildKey(body: Record<string, unknown>): string {
     const relevant: Record<string, unknown> = {
       model: body.model,
       messages: body.messages,
       tools: body.tools,
-      system: body.system,
       max_tokens: body.max_tokens,
     };
-    const hash = crypto.createHash('md5').update(JSON.stringify(relevant)).digest('hex');
+    const system = normalizeSystem(body.system);
+    if (system) relevant.system = system;
+
+    const hash = crypto
+      .createHash('sha256')
+      .update(stableStringify(relevant))
+      .digest('hex');
     return hash;
   }
 
-  /** Check if a response should be cached (non-streaming, no thinking) */
   shouldCache(body: Record<string, unknown>): boolean {
     if (!this.config.enabled) return false;
-    // Only cache non-streaming requests
     if (body.stream === true) return false;
-    // Don't cache requests with thinking enabled (reasoning content varies)
-    if ((body as any).thinking?.type === 'enabled') return false;
-    // Don't cache error bodies
+    if ((body as { thinking?: { type?: string } }).thinking?.type === 'enabled') return false;
     if (!body.model || !body.messages) return false;
     return true;
   }
 
-  /** Get cached response by key. Returns undefined on miss or expiry. */
   get(key: string): unknown | undefined {
     const entry = this.cache.get(key);
     if (!entry) return undefined;
@@ -102,12 +105,13 @@ export class ResponseCache {
       return undefined;
     }
 
+    // LRU: move to end on access
+    this.cache.delete(key);
+    this.cache.set(key, entry);
     return entry.data;
   }
 
-  /** Store a response in cache */
   set(key: string, data: unknown): void {
-    // Evict oldest entries if at capacity
     while (this.cache.size >= this.config.maxEntries) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
@@ -120,5 +124,4 @@ export class ResponseCache {
   }
 }
 
-// Singleton instance
 export const responseCache = new ResponseCache();

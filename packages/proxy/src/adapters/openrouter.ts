@@ -20,6 +20,8 @@ import type {
   ValidationResult,
 } from './interface.js';
 import type { RouteResolution } from '../types/index.js';
+import { buildProviderHeaders, type HeaderOptions } from './base-headers.js';
+import { upstreamFetch } from '../services/upstream-http.js';
 import { createParser } from 'eventsource-parser';
 import type { EventSourceMessage } from 'eventsource-parser';
 
@@ -28,6 +30,9 @@ export class OpenRouterAdapter implements ProviderAdapter {
   readonly apiPath = '/v1/messages';
   timeouts = { streaming: 120_000, nonStreaming: 30_000 };
 
+  buildHeaders(apiKey: string, opts: HeaderOptions): Record<string, string> {
+    return buildProviderHeaders(this.providerType, apiKey, opts);
+  }
 
   /**
    * OpenRouter supports native Anthropic endpoint — passthrough with stream flag
@@ -188,7 +193,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
    */
   async validate(baseUrl: string, apiKey: string): Promise<ValidationResult> {
     try {
-      const resp = await fetch(`${baseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${baseUrl}/v1/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });

@@ -191,6 +191,10 @@ export class ContentBlockManager {
   }
 }
 
+import { createParser } from 'eventsource-parser';
+import type { EventSourceMessage } from 'eventsource-parser';
+import { estimateOutputTokens } from './token-counter.js';
+
 // ---------------------------------------------------------------------------
 // SSEBuilder — generates correct Anthropic SSE event sequence
 // Sequence: message_start → content_block_start → content_block_delta →
@@ -201,6 +205,7 @@ export class SSEBuilder {
   private blocks = new ContentBlockManager();
   private totalOutputChars = 0;
   private totalReasoningChars = 0;
+  private outputText = '';
 
   constructor(
     private messageId: string,
@@ -218,8 +223,8 @@ export class SSEBuilder {
     return this.totalOutputChars > this.totalReasoningChars;
   }
 
-  /** Estimate output tokens from accumulated content (rough: ~4 chars/token) */
   private estimateOutputTokens(): number {
+    if (this.outputText) return estimateOutputTokens(this.outputText);
     return Math.max(1, Math.round(this.totalOutputChars / 4));
   }
 
@@ -288,6 +293,7 @@ export class SSEBuilder {
   /** Emit a content_block_delta with text_delta */
   emitTextDelta(content: string): string {
     this.totalOutputChars += content.length;
+    this.outputText += content;
     const index = this.blocks['textIndex'] >= 0 ? this.blocks['textIndex'] : this.blocks.allocateIndex();
     return formatSSEEvent('content_block_delta', {
       type: 'content_block_delta',
@@ -300,6 +306,7 @@ export class SSEBuilder {
   emitThinkingDelta(thinking: string): string {
     this.totalOutputChars += thinking.length;
     this.totalReasoningChars += thinking.length;
+    this.outputText += thinking;
     return this.blocks.emitThinkingDelta(thinking);
   }
 

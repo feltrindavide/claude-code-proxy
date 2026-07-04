@@ -230,9 +230,9 @@ export class ConfigService {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = join(this.configDir, 'config-backup', `config-backup-${timestamp}.json`);
 
-    // Ensure directory exists
-    if (!existsSync(this.configDir)) {
-      mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
+    const backupDir = join(this.configDir, 'config-backup');
+    if (!existsSync(backupDir)) {
+      mkdirSync(backupDir, { recursive: true, mode: 0o700 });
     }
 
     writeFileSync(backupPath, JSON.stringify(config, null, 2), { mode: 0o600 });

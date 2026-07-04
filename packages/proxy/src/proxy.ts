@@ -17,31 +17,32 @@
 import type { Request, Response } from 'express';
 import type { RouteResolution } from './types/index.js';
 import { getOrCreateAdapter } from './adapters/index.js';
-import { providerService } from './services/provider.js';
 import { getKey } from './services/keychain.js';
 import { getUserFacingErrorMessage } from './services/sse-transformer.js';
 import { parseToolArguments } from './services/response-parsers.js';
 import { fetchWithRetry } from './services/retryHandler.js';
 import { contextRegistry, type LastContextUsage } from './services/context-registry.js';
 import { countRequestTokens, estimateOutputTokens } from './services/token-counter.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
 import type { SessionUsage } from './services/session-tracker.js';
 import { extractSessionId, updateSessionUsage, getSessionUsage } from './services/session-tracker.js';
 import { tryFastPath } from './services/fast-path.js';
 import { responseCache } from './services/response-cache.js';
 import { configService } from './services/config.js';
 import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlockTracker } from './services/thinking-filter.js';
+import { resolveRequest } from './services/route-resolver.js';
+import { upstreamFetch } from './services/upstream-http.js';
+import { registerActiveStream } from './services/shutdown.js';
+import { proxyCacheHitsTotal } from './metrics/prometheus.js';
+import { createRequestLogger, logger } from './lib/logger.js';
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
  * Per D-26: Anthropic-compatible error format
  * Per D-28: User-friendly message, full error logged internally
  */
-function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean): void {
-  // Log full error internally (without API keys — getUserFacingErrorMessage sanitizes)
-  console.error('[Proxy] Upstream error:', error);
+function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean, reqId?: string): void {
+  const log = reqId ? createRequestLogger(reqId) : logger;
+  log.error({ err: error instanceof Error ? error.message : String(error) }, 'Upstream error');
 
   // Get sanitized user-friendly message
   const userFriendlyMessage = getUserFacingErrorMessage(error);
@@ -69,70 +70,9 @@ function emitAnthropicError(res: Response, error: unknown, wantsStream?: boolean
 }
 
 // ---------------------------------------------------------------------------
-// Subagent model tag — parsing <CCR-SUBAGENT-MODEL> dal system prompt
-// ---------------------------------------------------------------------------
-
-const SUBAGENT_TAG_RE = /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s;
-
-/**
- * Cerca <CCR-SUBAGENT-MODEL>model</CCR-SUBAGENT-MODEL> nel system prompt.
- * Se trovato, rimuove il tag e restituisce il model name.
- * Il tag permette di specificare un modello diverso per agent/subagent.
- */
-function extractSubagentModel(body: Record<string, unknown>): string | null {
-  const system = body.system;
-  if (!system) return null;
-
-  let systemStr: string;
-  if (typeof system === 'string') {
-    systemStr = system;
-  } else if (Array.isArray(system)) {
-    systemStr = system
-      .filter((b: any) => b.type === 'text')
-      .map((b: any) => b.text)
-      .join('\n');
-  } else {
-    return null;
-  }
-
-  const match = systemStr.match(SUBAGENT_TAG_RE);
-  if (!match) return null;
-
-  const modelName = match[1].trim();
-  if (!modelName) return null;
-
-  // Rimuovi il tag dal system prompt
-  const cleaned = systemStr.replace(SUBAGENT_TAG_RE, '').trim();
-  if (typeof body.system === 'string') {
-    body.system = cleaned;
-  } else if (Array.isArray(body.system)) {
-    // Replace text in the first text block
-    for (const b of body.system as any[]) {
-      if (b.type === 'text') {
-        b.text = b.text.replace(SUBAGENT_TAG_RE, '').trim();
-        break;
-      }
-    }
-  }
-
-  console.log(`[Proxy] Subagent model tag: using "${modelName}" instead of "${body.model}"`);
-  return modelName;
-}
-
-// ---------------------------------------------------------------------------
 // Per-session context tracking
 // Ogni sessione Claude Code ha il proprio tracciamento.
 // ---------------------------------------------------------------------------
-
-/**
- * Estrae o restituisce la sessione corrente da body.metadata.user_id
- */
-function getSessionId(body: Record<string, unknown>): string | null {
-  const sid = extractSessionId(body);
-  if (sid) return sid;
-  // Fallback: usa ultime 4 parole del prompt come identificatore approssimativo
-  return null;
-}
 
 /**
  * Restituisce il contesto per la sessione corrente (o ultima attiva)
@@ -147,7 +87,10 @@ export let lastContextUsage: LastContextUsage = { inputTokens: 0, outputTokens: 
 const saved = getSessionUsage();
 if (saved) {
   lastContextUsage = saved;
-  console.log(`[Context] Restored session: ${saved.model} | ${saved.inputTokens + saved.outputTokens} tokens`);
+  logger.info(
+    { model: saved.model, tokens: saved.inputTokens + saved.outputTokens },
+    'Restored session context',
+  );
 }
 
 /**
@@ -160,7 +103,6 @@ export async function handleProxyRequest(
 ): Promise<void> {
   // 1. Parse model from request body
   const body = req.body || {};
-  let modelName = body.model || 'claude-opus-4-20250514';
 
   // 1a. Fast-path: short-circuit for trivially-answerable requests
   // Must run before subagent tag extraction (fast-path handles simple requests)
@@ -173,54 +115,32 @@ export async function handleProxyRequest(
   if (responseCacheKey) {
     const cached = responseCache.get(responseCacheKey);
     if (cached) {
-      console.log(`[Cache] HIT for ${modelName} (key=${responseCacheKey.slice(0, 8)}…)`);
+      proxyCacheHitsTotal.inc({ hit: 'true' });
+      createRequestLogger(req.requestId || 'unknown').info(
+        { model: body.model, key: responseCacheKey.slice(0, 8) },
+        'Response cache HIT',
+      );
       res.json(cached);
       return;
     }
+    proxyCacheHitsTotal.inc({ hit: 'false' });
   }
 
-  // Subagent model tag: <CCR-SUBAGENT-MODEL>model</CCR-SUBAGENT-MODEL> in system prompt
-  // Permette di specificare un modello diverso per sessioni subagent
-  const subagentModel = extractSubagentModel(body);
-  if (subagentModel) {
-    modelName = subagentModel;
-  }
-
-  let resolution: RouteResolution | null = null;
-
-  // Decode gateway model IDs: "anthropic/{providerName}/{targetModel}"
-  if (modelName.startsWith('anthropic/')) {
-    const parts = modelName.split('/');
-    if (parts.length >= 3) {
-      const providerName = parts[1];
-      const targetModel = parts.slice(2).join('/');
-      const provider = providerService.getProvider(providerName);
-      if (provider) {
-        resolution = {
-          provider,
-          targetModel,
-          originalModel: modelName,
-        };
-      }
-    }
-  }
-
-  // 2. Resolve route via ProviderService
-  if (!resolution) {
-    // First try direct model lookup (custom model names)
-    resolution = providerService.resolveCustomModel(modelName);
-    // Fall back to tier-based routing (claude-opus-* → opus → route)
-    if (!resolution) {
-      resolution = providerService.resolveModelRoute(modelName);
-    }
-  }
+  // Resolve route (subagent tag, config subagent model, gateway, custom, tier)
+  const { modelName, resolution } = resolveRequest(body);
   if (!resolution) {
     return emitAnthropicError(
       res,
       `No route configured for model: ${modelName}`,
       body.stream === true,
+      req.requestId,
     );
   }
+
+  const reqLog = createRequestLogger(req.requestId || 'unknown', {
+    provider: resolution.provider.name,
+    model: body.model as string,
+  });
 
   // Enrich request log with route resolution data (per D-45, 04-01)
   (req as any)._logContext = {
@@ -229,6 +149,10 @@ export async function handleProxyRequest(
     targetModel: resolution.targetModel,
   };
 
+  if (resolution.fallbackTier && resolution.claudeTier) {
+    res.setHeader('X-Proxy-Fallback-Tier', resolution.claudeTier);
+  }
+
   // 3. Get API key from Keychain
   const apiKey = await getKey(resolution.provider.name);
   if (!apiKey) {
@@ -236,6 +160,7 @@ export async function handleProxyRequest(
       res,
       `API key not found for provider: ${resolution.provider.name}`,
       body.stream === true,
+      req.requestId,
     );
   }
 
@@ -263,7 +188,7 @@ export async function handleProxyRequest(
   if (resolution.targetModel?.toLowerCase().includes('deepseek') && Array.isArray(providerBody.messages)) {
     const hasRC = (providerBody.messages as any[]).filter((m: any) => m.role === 'assistant' && !m.reasoning_content).length;
     if (hasRC > 0) {
-      console.log(`[Proxy DEBUG] ${hasRC} assistant message(s) missing reasoning_content for DeepSeek!`);
+      reqLog.warn({ count: hasRC }, 'Assistant messages missing reasoning_content for DeepSeek');
     }
   }
 
@@ -293,7 +218,7 @@ export async function handleProxyRequest(
         lastMsg.content.push({ type: 'text', text: prompt });
       }
     }
-    console.log(`[Proxy] Force reasoning enabled for ${resolution.targetModel}`);
+    reqLog.info({ model: resolution.targetModel }, 'Force reasoning enabled');
   }
 
   // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
@@ -320,7 +245,10 @@ export async function handleProxyRequest(
       ...((providerBody as any).messages || [])
     ];
 
-    console.log(`[Proxy] Boosted max_tokens from ${originalMaxTokens} to ${boosted} for ${resolution.targetModel} (reasoning overhead)`);
+    reqLog.info(
+      { from: originalMaxTokens, to: boosted, model: resolution.targetModel },
+      'Boosted max_tokens for reasoning overhead',
+    );
   }
 
   // Clamp max_tokens to model's max_output if known (evita errori "max_tokens exceeds model limit")
@@ -329,12 +257,19 @@ export async function handleProxyRequest(
     const current = (providerBody as any).max_tokens as number;
     if (current > modelInfo.max_output) {
       (providerBody as any).max_tokens = modelInfo.max_output;
-      console.log(`[Proxy] Clamped max_tokens from ${current} to ${modelInfo.max_output} (model max_output cap)`);
+      reqLog.info(
+        { from: current, to: modelInfo.max_output },
+        'Clamped max_tokens to model max_output',
+      );
     }
   }
 
   // 6. Make upstream request with retry (D-66 to D-69)
+  const wantsStream = body.stream === true;
+  (res as any)._wantsStream = wantsStream;
   let retryAttempt = 0;
+
+  const upstreamStart = Date.now();
 
   try {
     const upstreamResponse = await fetchWithRetry(
@@ -342,36 +277,35 @@ export async function handleProxyRequest(
       async (attemptNumber) => {
         retryAttempt = attemptNumber;
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), adapter.timeouts.streaming);
+        const timeoutMs = wantsStream
+          ? adapter.timeouts.streaming
+          : adapter.timeouts.nonStreaming;
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-          const response = await fetch(
-            `${resolution.provider.baseUrl}${adapter.apiPath}`,
-            {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`,
-                Accept: 'text/event-stream',
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-              },
-              body: JSON.stringify(providerBody),
-              signal: controller.signal,
-            },
-          );
+        const response = await upstreamFetch(
+          `${resolution.provider.baseUrl}${adapter.apiPath}`,
+          {
+            method: 'POST',
+            headers: adapter.buildHeaders(apiKey, {
+              streaming: wantsStream,
+              requestId: req.requestId,
+            }),
+            body: JSON.stringify(providerBody),
+            signal: controller.signal,
+          },
+        );
 
         clearTimeout(timeout);
         return response;
       },
     );
 
+    (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
+
     // Signal retry count to request logger (D-69)
     if (retryAttempt > 0) {
       (req as any)._retryAttempt = retryAttempt;
     }
-
-    // 7. Check if client wants streaming (only true = streaming; absent/false = JSON)
-    const wantsStream = body.stream === true;
-    (res as any)._wantsStream = wantsStream;
 
     // 7b. Decide if thinking was requested by Claude Code (high-effort mode)
     // This controls whether adapters emit native thinking_delta events or convert to text
@@ -385,6 +319,7 @@ export async function handleProxyRequest(
 
     // 8. Transform and stream response (provider SSE → Anthropic SSE)
     if (wantsStream) {
+      registerActiveStream(res);
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -397,6 +332,8 @@ export async function handleProxyRequest(
       const buf: string[] = [];
       const STREAM_DEADLINE = 120_000; // 120s total streaming deadline
       const streamStart = Date.now();
+      let outputTokens = 0;
+      let streamedText = '';
 
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
@@ -406,7 +343,7 @@ export async function handleProxyRequest(
       })) {
         // Global streaming deadline — prevents hanging on endless reasoning
         if (Date.now() - streamStart > STREAM_DEADLINE) {
-          console.warn(`[Proxy] Streaming deadline exceeded (${STREAM_DEADLINE}ms), truncating response`);
+          reqLog.warn({ deadlineMs: STREAM_DEADLINE }, 'Streaming deadline exceeded, truncating');
           break;
         }
 
@@ -421,23 +358,45 @@ export async function handleProxyRequest(
 
         if (filteredEvent === null) continue; // Thinking block stripped
 
+        // Track output tokens from SSE usage events
+        const tok = extractOutputTokensFromEvent(filteredEvent);
+        if (tok > 0) outputTokens = Math.max(outputTokens, tok);
+        const dataMatch = filteredEvent.match(/^data: (.+)$/m);
+        let isContentDelta = false;
+        if (dataMatch) {
+          try {
+            const parsed = JSON.parse(dataMatch[1]);
+            if (parsed.type === 'content_block_delta') {
+              isContentDelta = true;
+              if (parsed.delta?.type === 'text_delta') {
+                streamedText += parsed.delta.text || '';
+              } else if (parsed.delta?.type === 'thinking_delta') {
+                streamedText += parsed.delta.thinking || '';
+              }
+            }
+          } catch {}
+        }
+
         // Apply inflation to message_start (input) and message_delta (output)
         if (inflationFactor !== 1) {
           buf.push(inflateUsageTokens(filteredEvent, inflationFactor));
         } else {
           buf.push(filteredEvent);
         }
-        // Flush in batches of 15 events or on message boundaries
-        if (buf.length >= 15 || filteredEvent.includes('message_') || filteredEvent.includes('"error"')) {
+
+        const isBoundary =
+          filteredEvent.includes('message_') || filteredEvent.includes('"error"');
+        if (shouldFlushStreamBuffer({ isContentDelta, isBoundary, bufLength: buf.length })) {
           res.write(buf.join(''));
           buf.length = 0;
         }
       }
       if (buf.length > 0) res.write(buf.join(''));
       res.end();
-      // Traccia ultimo utilizzo con conteggio token accurato
-      const inputTok = countRequestTokens(body.messages, body.system, body.tools);
-      updateLastUsage(inputTok.total, 0, resolution, inflationFactor, currentSessionId);
+      if (outputTokens === 0 && streamedText) {
+        outputTokens = estimateOutputTokens(streamedText);
+      }
+      updateLastUsage(realInputTokens.total, outputTokens, resolution, inflationFactor, currentSessionId);
     } else {
       // Non-streaming: accumulate events into a complete JSON response
       res.setHeader('Content-Type', 'application/json');
@@ -515,7 +474,7 @@ export async function handleProxyRequest(
       updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor, currentSessionId);
     }
   } catch (error) {
-    // Instead of emitting an error event (which Claude Code can't parse),
+    (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
     // return a valid text response with the error message.
     // This way Claude Code always gets a parsable response.
     const errMsg = getUserFacingErrorMessage(error);
@@ -627,6 +586,31 @@ function updateLastUsage(
   };
   lastContextUsage = usage as LastContextUsage;
   updateSessionUsage(sessionId || null, usage);
+}
+
+/**
+ * Extract output token count from an Anthropic SSE event string.
+ */
+export function extractOutputTokensFromEvent(event: string): number {
+  const dataMatch = event.match(/^data: (.+)$/m);
+  if (!dataMatch) return 0;
+  try {
+    const parsed = JSON.parse(dataMatch[1]);
+    if (parsed.type === 'message_delta' && parsed.usage?.output_tokens) {
+      return parsed.usage.output_tokens;
+    }
+  } catch {}
+  return 0;
+}
+
+export function shouldFlushStreamBuffer(opts: {
+  isContentDelta: boolean;
+  isBoundary: boolean;
+  bufLength: number;
+  batchSize?: number;
+}): boolean {
+  const batchSize = opts.batchSize ?? 15;
+  return opts.isContentDelta || opts.isBoundary || opts.bufLength >= batchSize;
 }
 
 export { emitAnthropicError, inflateUsageTokens, getInflationFactor };

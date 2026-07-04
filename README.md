@@ -44,8 +44,8 @@ curl -X POST http://localhost:3456/admin/setup-desktop
 This will:
 1. Add `api.anthropic.com → 127.0.0.1` to `/etc/hosts`
 2. Generate and trust a self-signed TLS certificate for `api.anthropic.com`
-3. Redirect port 443 → 3457 via `pf` (macOS packet filter)
-4. Start an HTTPS server on port 3457
+3. Redirect port 443 → 8743 via `pf` (macOS packet filter)
+4. Start an HTTPS server on port 8743
 
 Then fully quit and reopen Claude Desktop. All requests (chat, cowork, code) will be routed through the proxy.
 

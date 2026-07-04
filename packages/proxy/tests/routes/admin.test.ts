@@ -1,31 +1,34 @@
 /**
  * Admin API tests
- * Phase: 01-core-proxy-server
- * Plan: 01-02, Task 3
- * 
- * Integration tests - tests admin routes behavior
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
 describe('Admin API', () => {
   let app: express.Express;
+  let adminToken: string;
 
   beforeEach(async () => {
-    // Import services directly for this test
+    vi.resetModules();
     const { default: adminRouter } = await import('../../src/routes/admin.js');
-    
+
     app = express();
     app.use(express.json());
     app.use('/admin', adminRouter);
+
+    const bootstrap = await request(app).get('/admin/auth/bootstrap');
+    adminToken = bootstrap.body.token;
   });
+
+  function auth(method: 'get' | 'put' | 'post', path: string) {
+    return request(app)[method](path).set('X-Admin-Token', adminToken);
+  }
 
   describe('GET /admin/config', () => {
     it('should return current config', async () => {
-      const response = await request(app).get('/admin/config');
-      
+      const response = await auth('get', '/admin/config');
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('providers');
       expect(response.body).toHaveProperty('routes');
@@ -34,42 +37,36 @@ describe('Admin API', () => {
 
   describe('PUT /admin/config', () => {
     it('should save config', async () => {
-      const newConfig = {
+      const response = await auth('put', '/admin/config').send({
         providers: [],
         routes: [{ claudeTier: 'opus', providerName: 'test', targetModel: 'test-model' }],
-      };
-      
-      const response = await request(app).put('/admin/config').send(newConfig);
-      
+      });
       expect(response.status).toBe(200);
     });
   });
 
   describe('GET /admin/providers', () => {
     it('should list providers', async () => {
-      const response = await request(app).get('/admin/providers');
-      
+      const response = await auth('get', '/admin/providers');
       expect(response.status).toBe(200);
       expect(Array.isArray(response.body)).toBe(true);
     });
   });
 
   describe('GET /admin/routes', () => {
-    it('should return model routes', async () => {
-      const response = await request(app).get('/admin/routes');
-      
+    it('should return model routes object', async () => {
+      const response = await auth('get', '/admin/routes');
       expect(response.status).toBe(200);
-      expect(Array.isArray(response.body)).toBe(true);
+      expect(response.body).toHaveProperty('routes');
+      expect(Array.isArray(response.body.routes)).toBe(true);
     });
   });
 
   describe('PUT /admin/routes', () => {
     it('should update routes', async () => {
-      const routes = [{ claudeTier: 'opus', providerName: 'opencode', targetModel: 'qwen3.6' }];
-      
-      const response = await request(app).put('/admin/routes').send({ routes });
-      
-      // May fail if config dir not writable, but should not crash
+      const response = await auth('put', '/admin/routes').send({
+        routes: [{ claudeTier: 'opus', providerName: 'opencode', targetModel: 'qwen3.6' }],
+      });
       expect([200, 500]).toContain(response.status);
     });
   });

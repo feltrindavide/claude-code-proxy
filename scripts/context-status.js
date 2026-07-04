@@ -21,6 +21,22 @@ const RED = '\x1b[31m';
 
 const PROXY_URL = 'http://localhost:3456';
 
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function getAdminHeaders() {
+  try {
+    const token = fs.readFileSync(
+      path.join(os.homedir(), '.claude', 'claude-code-proxy', 'data', 'admin.token'),
+      'utf-8',
+    ).trim();
+    return { 'X-Admin-Token': token };
+  } catch {
+    return {};
+  }
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let input = '';
@@ -62,7 +78,7 @@ async function main() {
       ? `${PROXY_URL}/admin/context?session=${encodeURIComponent(sessionId)}`
       : `${PROXY_URL}/admin/context`;
 
-    const resp = await fetch(url, { signal: AbortSignal.timeout(2000) });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(2000), headers: getAdminHeaders() });
     if (!resp.ok) {
       process.stdout.write(`${BOLD}⚠ proxy offline${RESET}\n`);
       process.exit(0);

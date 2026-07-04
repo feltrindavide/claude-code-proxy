@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { join } from 'path';
 import os from 'os';
 import type { RequestLogEntry, ClaudeTier } from '../types/index.js';
+import { broadcastLogEntry } from './log-broadcast.js';
 
 // Log directory and file paths
 const LOG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
@@ -64,6 +65,7 @@ export class RequestLogService {
       this.entries = this.entries.slice(-MAX_ENTRIES);
     }
     this.persist();
+    broadcastLogEntry(entry);
   }
 
   /**
@@ -97,10 +99,6 @@ export class RequestLogService {
     return serialized;
   }
 
-  /**
-   * Persist entries to disk using atomic write pattern
-   * Ensures directory exists, writes to temp file, renames to final path
-   */
   private persist(): void {
     // Ensure directory exists with secure permissions
     if (!existsSync(LOG_DIR)) {

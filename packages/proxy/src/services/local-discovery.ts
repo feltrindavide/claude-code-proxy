@@ -6,6 +6,8 @@
  * used in model routing but won't overwrite manually-configured providers.
  */
 
+import { upstreamFetch } from './upstream-http.js';
+
 // ---------------------------------------------------------------------------
 // Detector interface
 // ---------------------------------------------------------------------------
@@ -40,7 +42,7 @@ class OllamaDetector implements ProviderDetector {
 
   async detect(): Promise<boolean> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/api/tags`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/api/tags`, {
         signal: AbortSignal.timeout(3_000),
       });
       if (!resp.ok) return false;
@@ -53,7 +55,7 @@ class OllamaDetector implements ProviderDetector {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/api/tags`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/api/tags`, {
         signal: AbortSignal.timeout(5_000),
       });
       if (!resp.ok) return [];
@@ -77,7 +79,7 @@ class LMStudioDetector implements ProviderDetector {
 
   async detect(): Promise<boolean> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/v1/models`, {
         signal: AbortSignal.timeout(3_000),
       });
       if (!resp.ok) return false;
@@ -90,7 +92,7 @@ class LMStudioDetector implements ProviderDetector {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/v1/models`, {
         signal: AbortSignal.timeout(5_000),
       });
       if (!resp.ok) return [];
@@ -114,7 +116,7 @@ class LlamaCppDetector implements ProviderDetector {
 
   async detect(): Promise<boolean> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/v1/models`, {
         signal: AbortSignal.timeout(3_000),
       });
       if (!resp.ok) return false;
@@ -127,7 +129,7 @@ class LlamaCppDetector implements ProviderDetector {
 
   async fetchModels(): Promise<string[]> {
     try {
-      const resp = await fetch(`${this.defaultBaseUrl}/v1/models`, {
+      const resp = await upstreamFetch(`${this.defaultBaseUrl}/v1/models`, {
         signal: AbortSignal.timeout(5_000),
       });
       if (!resp.ok) return [];

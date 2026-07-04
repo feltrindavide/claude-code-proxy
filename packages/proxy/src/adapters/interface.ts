@@ -11,6 +11,7 @@
  */
 
 import type { RouteResolution } from '../types/index.js';
+import type { HeaderOptions } from './base-headers.js';
 
 /**
  * Anthropic messages API request body shape
@@ -86,4 +87,7 @@ export interface ProviderAdapter {
 
   /** Validate provider connectivity */
   validate(baseUrl: string, apiKey: string): Promise<ValidationResult>;
+
+  /** Build upstream request headers for this provider */
+  buildHeaders(apiKey: string, opts: HeaderOptions): Record<string, string>;
 }

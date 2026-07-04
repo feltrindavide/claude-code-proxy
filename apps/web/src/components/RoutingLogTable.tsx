@@ -1,6 +1,7 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useLogStore } from '@/stores/logStore';
+import { useLogStream } from '@/hooks/useLogStream';
 import { ArrowUp, ArrowDown, RefreshCw } from 'lucide-react';
 
 type SortDirection = 'asc' | 'desc' | null;
@@ -12,18 +13,12 @@ interface SortConfig {
 }
 
 export function RoutingLogTable() {
-  const { entries, isLoading, lastRefresh, error, fetchLogs } = useLogStore();
+  const { entries, isLoading, lastRefresh, error, fetchLogs, wsConnected } = useLogStore();
+  useLogStream();
   const [sort, setSort] = useState<SortConfig>({ key: 'timestamp', direction: 'desc' });
   const [filterProvider, setFilterProvider] = useState('all');
   const [filterTier, setFilterTier] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
-
-  // Polling every 5 seconds
-  useEffect(() => {
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 5000);
-    return () => clearInterval(interval);
-  }, [fetchLogs]);
 
   // Get unique providers for filter dropdown
   const providers = useMemo(() => {
@@ -107,6 +102,15 @@ export function RoutingLogTable() {
 
         {/* Refresh info */}
         <div className="flex items-center gap-xs ml-auto text-sm text-muted">
+          <span
+            className={`inline-flex items-center gap-1 ${wsConnected ? 'text-semantic-success' : 'text-muted'}`}
+            title={wsConnected ? 'WebSocket live' : 'Polling fallback'}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-semantic-success animate-pulse' : 'bg-muted'}`}
+            />
+            {wsConnected ? 'Live' : 'Polling'}
+          </span>
           {lastRefresh && (
             <span>Updated {lastRefresh.toLocaleTimeString()}</span>
           )}

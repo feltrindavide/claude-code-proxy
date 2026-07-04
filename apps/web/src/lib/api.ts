@@ -1,5 +1,25 @@
 const PROXY_API_BASE = 'http://localhost:3456';
 
+let cachedAdminToken: string | null = null;
+
+export async function ensureAdminToken(): Promise<string> {
+  if (cachedAdminToken) return cachedAdminToken;
+  const response = await fetch(`${PROXY_API_BASE}/admin/auth/bootstrap`, {
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!response.ok) throw new Error('Failed to bootstrap admin token');
+  const data = await response.json() as { token: string };
+  cachedAdminToken = data.token;
+  return cachedAdminToken;
+}
+
+async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = await ensureAdminToken();
+  const headers = new Headers(init?.headers);
+  headers.set('X-Admin-Token', token);
+  return fetch(url, { ...init, headers });
+}
+
 // Tauri invoke — lazy loaded only when running inside Tauri app
 // In browser mode, startProxy/stopProxy return helpful errors
 async function tauriInvoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
@@ -59,7 +79,7 @@ export async function stopProxy(): Promise<{ success: boolean; error?: string }>
 
 export async function getProviderCount(): Promise<number> {
   try {
-    const response = await fetch(`${PROXY_API_BASE}/admin/providers`, {
+    const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) return 0;
@@ -79,7 +99,7 @@ export async function fetchProviders(): Promise<Array<{
   enabled: boolean;
   priority: number;
 }>> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch providers');
@@ -95,7 +115,7 @@ export async function saveProvider(data: {
   enabled?: boolean;
   priority?: number;
 }): Promise<{ success: boolean; validation?: { valid: boolean; error?: string } }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -115,7 +135,7 @@ export async function saveProvider(data: {
 }
 
 export async function deleteProvider(id: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers/${id}`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${id}`, {
     method: 'DELETE',
     signal: AbortSignal.timeout(5000),
   });
@@ -124,7 +144,7 @@ export async function deleteProvider(id: string): Promise<{ success: boolean }> 
 }
 
 export async function testProviderConnection(id: string): Promise<{ valid: boolean; error?: string }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers/${id}/validate`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${id}/validate`, {
     method: 'POST',
     signal: AbortSignal.timeout(15000),
   });
@@ -143,7 +163,7 @@ export async function fetchRoutes(): Promise<{
   }>;
   subagentModel?: string;
 }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/routes`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/routes`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch routes');
@@ -155,7 +175,7 @@ export async function saveRoutes(routes: Array<{
   providerName: string;
   targetModel: string;
 }>, subagentModel?: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/routes`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/routes`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ routes, subagentModel }),
@@ -169,7 +189,7 @@ export async function fetchConfig(): Promise<{
   providers: Array<any>;
   routes: Array<any>;
 }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/config`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch config');
@@ -178,6 +198,7 @@ export async function fetchConfig(): Promise<{
 
 export interface RequestLogEntry {
   timestamp: string;
+  requestId?: string;
   requestModel: string;
   claudeTier?: string;
   providerName?: string;
@@ -191,7 +212,7 @@ export interface RequestLogEntry {
 }
 
 export async function fetchLogs(): Promise<RequestLogEntry[]> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/logs`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/logs`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch request logs');
@@ -203,7 +224,7 @@ export async function exportConfig(): Promise<{
   routes: Array<{ claudeTier: string; providerName: string; targetModel: string }>;
   settings: { port: number };
 }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/config/export`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/export`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to export config');
@@ -211,7 +232,7 @@ export async function exportConfig(): Promise<{
 }
 
 export async function importConfig(data: object, strategy: 'merge' | 'replace'): Promise<{ success: boolean; backupPath?: string }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/config/import`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/import`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data, strategy }),
@@ -225,7 +246,7 @@ export async function importConfig(data: object, strategy: 'merge' | 'replace'):
 }
 
 export async function fetchDiff(incoming: object): Promise<{ current: object; incoming: object }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/config/diff`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/config/diff`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ data: incoming }),
@@ -236,7 +257,7 @@ export async function fetchDiff(incoming: object): Promise<{ current: object; in
 }
 
 export async function fetchValidationResults(): Promise<Record<string, { valid: boolean; error?: string; timestamp: string; dismissed?: boolean }>> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/validation-results`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/validation-results`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch validation results');
@@ -244,7 +265,7 @@ export async function fetchValidationResults(): Promise<Record<string, { valid: 
 }
 
 export async function dismissValidationWarning(providerName: string): Promise<{ success: boolean }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/validation-results/${providerName}/dismiss`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/validation-results/${providerName}/dismiss`, {
     method: 'POST',
     signal: AbortSignal.timeout(5000),
   });
@@ -253,7 +274,7 @@ export async function dismissValidationWarning(providerName: string): Promise<{ 
 }
 
 export async function getRateLimit(providerId: string): Promise<{ providerName: string; requestsPerMinute: number }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch rate limit');
@@ -261,7 +282,7 @@ export async function getRateLimit(providerId: string): Promise<{ providerName: 
 }
 
 export async function setRateLimit(providerId: string, rpm: number): Promise<{ success: boolean; providerName: string; requestsPerMinute: number }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerId}/rate-limit`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requestsPerMinute: rpm }),
@@ -272,7 +293,7 @@ export async function setRateLimit(providerId: string, rpm: number): Promise<{ s
 }
 
 export async function fetchRecentLogs(): Promise<RequestLogEntry[]> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/logs`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/logs`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch request logs');
@@ -301,7 +322,7 @@ export interface DiscoveryStatus {
 }
 
 export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/discovery`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/discovery`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch discovery status');
@@ -309,7 +330,7 @@ export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
 }
 
 export async function scanDiscovery(): Promise<{ success: boolean; providers: DiscoveredProvider[] }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/discovery/scan`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/discovery/scan`, {
     method: 'POST',
     signal: AbortSignal.timeout(15000),
   });
@@ -333,7 +354,7 @@ export interface ThinkingConfig {
 }
 
 export async function fetchThinkingConfig(): Promise<ThinkingConfig> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/thinking-config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch thinking config');
@@ -341,7 +362,7 @@ export async function fetchThinkingConfig(): Promise<ThinkingConfig> {
 }
 
 export async function saveThinkingConfig(config: ThinkingConfig): Promise<{ success: boolean }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/thinking-config`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/thinking-config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
@@ -362,7 +383,7 @@ export interface CacheConfig {
 }
 
 export async function fetchCacheConfig(): Promise<CacheConfig> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/cache-config`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/cache-config`, {
     signal: AbortSignal.timeout(5000),
   });
   if (!response.ok) throw new Error('Failed to fetch cache config');
@@ -370,7 +391,7 @@ export async function fetchCacheConfig(): Promise<CacheConfig> {
 }
 
 export async function saveCacheConfig(config: CacheConfig): Promise<{ success: boolean }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/cache-config`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/cache-config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
@@ -381,12 +402,31 @@ export async function saveCacheConfig(config: CacheConfig): Promise<{ success: b
 }
 
 export async function scanProviderModels(providerName: string): Promise<{ models: string[] }> {
-  const response = await fetch(`${PROXY_API_BASE}/admin/providers/${providerName}/models`, {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/providers/${providerName}/models`, {
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || 'Failed to scan models');
   }
+  return response.json();
+}
+
+export async function fetchAutoCompactThreshold(): Promise<{ threshold: number }> {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/auto-compact`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) throw new Error('Failed to fetch auto-compact threshold');
+  return response.json();
+}
+
+export async function saveAutoCompactThreshold(threshold: number): Promise<{ success: boolean }> {
+  const response = await adminFetch(`${PROXY_API_BASE}/admin/auto-compact`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threshold }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) throw new Error('Failed to save auto-compact threshold');
   return response.json();
 }

@@ -10,13 +10,13 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
-import { handleProxyRequest, lastContextUsage, getCurrentSessionUsage } from './proxy.js';
-import { getSessionUsage } from './services/session-tracker.js';
+import { handleProxyRequest } from './proxy.js';
 import { providerService } from './services/provider.js';
 import { contextRegistry } from './services/context-registry.js';
 import { configService } from './services/config.js';
 import { providerValidatorService } from './services/provider-validator.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
+import { requestIdMiddleware } from './middleware/request-id.js';
 import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
 import { requestLogService } from './services/requestLog.js';
 import { validationStoreService } from './services/validationStore.js';
@@ -28,11 +28,22 @@ const DEFAULT_HOST = 'localhost';
 
 import { writeModelEnvFile } from './services/modelEnv.js';
 import { LocalDiscoveryService } from './services/local-discovery.js';
+import { responseCache } from './services/response-cache.js';
+import { ensureAdminToken } from './services/admin-auth.js';
+import { setDiscoveryService, getDiscoveryService } from './services/discovery-registry.js';
+import { adminAuthMiddleware } from './middleware/adminAuth.js';
+import { prewarmAdapters } from './adapters/index.js';
+import { attachLogWebSocket, closeLogWebSocket } from './services/log-broadcast.js';
+import { setupGracefulShutdown } from './services/shutdown.js';
+import { rateLimiterService } from './services/rateLimiter.js';
+import { logger } from './lib/logger.js';
+import type { Server } from 'http';
 
 const app = express();
 
 // Middleware
 app.use(cors());
+app.use(requestIdMiddleware);
 app.use(express.json({ limit: '32mb' }));
 
 // Try to read app version from bundled package.json (production) or proxy package.json (dev)
@@ -183,13 +194,49 @@ function migrateFromOldPath(): void {
 /**
  * Auto-install Claude Code proxy plugins e configura settings.json
  */
-function installPluginOnStartup(): void {
-  const pluginSrcDir = path.join(__dirname, '../plugins');
-  const skillSrc = path.join(pluginSrcDir, 'proxy-context', 'SKILL.md');
-  const statusScriptSrc = path.join(pluginSrcDir, 'context-status.js');
-  const compactHookSrc = path.join(pluginSrcDir, 'auto-compact-hook.js');
+function resolvePluginSources(): {
+  skillSrc: string | null;
+  statusScriptSrc: string | null;
+  compactHookSrc: string | null;
+} {
+  const candidates = [
+    // Production bundle (Tauri): proxy-bundle/plugins/
+    {
+      skill: path.join(__dirname, '../plugins/proxy-context/SKILL.md'),
+      status: path.join(__dirname, '../plugins/context-status.js'),
+      compact: path.join(__dirname, '../plugins/auto-compact-hook.js'),
+    },
+    // Dev monorepo: packages/proxy/src → ../../../scripts
+    {
+      skill: path.join(__dirname, '../../../scripts/plugins/proxy-context/SKILL.md'),
+      status: path.join(__dirname, '../../../scripts/context-status.js'),
+      compact: path.join(__dirname, '../../../scripts/auto-compact-hook.js'),
+    },
+    // Fallback: cwd scripts/ (e.g. npm run dev from repo root)
+    {
+      skill: path.join(process.cwd(), 'scripts/plugins/proxy-context/SKILL.md'),
+      status: path.join(process.cwd(), 'scripts/context-status.js'),
+      compact: path.join(process.cwd(), 'scripts/auto-compact-hook.js'),
+    },
+  ];
 
-  if (!fs.existsSync(skillSrc) && !fs.existsSync(statusScriptSrc)) return;
+  for (const c of candidates) {
+    if (fs.existsSync(c.status) || fs.existsSync(c.skill)) {
+      return {
+        skillSrc: fs.existsSync(c.skill) ? c.skill : null,
+        statusScriptSrc: fs.existsSync(c.status) ? c.status : null,
+        compactHookSrc: fs.existsSync(c.compact) ? c.compact : null,
+      };
+    }
+  }
+
+  return { skillSrc: null, statusScriptSrc: null, compactHookSrc: null };
+}
+
+function installPluginOnStartup(): void {
+  const { skillSrc, statusScriptSrc, compactHookSrc } = resolvePluginSources();
+
+  if (!skillSrc && !statusScriptSrc) return;
 
   const home = process.env.HOME || process.env.USERPROFILE || '';
   if (!home) return;
@@ -203,27 +250,26 @@ function installPluginOnStartup(): void {
 
   let installed = false;
 
-  // Installa SKILL.md
-  if (fs.existsSync(skillSrc) && !fs.existsSync(skillDest)) {
+  // Installa SKILL.md (solo se assente)
+  if (skillSrc && !fs.existsSync(skillDest)) {
     fs.mkdirSync(path.dirname(skillDest), { recursive: true, mode: 0o700 });
     fs.writeFileSync(skillDest, fs.readFileSync(skillSrc, 'utf-8'), { mode: 0o600 });
     console.log('[Setup] Installed proxy-context skill →', skillDest);
     installed = true;
   }
 
-  // Installa context-status.js
-  if (fs.existsSync(statusScriptSrc) && !fs.existsSync(statusScriptDest)) {
+  // Sincronizza script hook (sovrascrive per propagare fix come admin token)
+  if (statusScriptSrc) {
     fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(statusScriptDest, fs.readFileSync(statusScriptSrc, 'utf-8'), { mode: 0o755 });
-    console.log('[Setup] Installed context-status script →', statusScriptDest);
+    if (!installed) console.log('[Setup] Synced context-status script →', statusScriptDest);
     installed = true;
   }
 
-  // Installa auto-compact-hook.js
-  if (fs.existsSync(compactHookSrc) && !fs.existsSync(compactHookDest)) {
+  if (compactHookSrc) {
     fs.mkdirSync(scriptsDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(compactHookDest, fs.readFileSync(compactHookSrc, 'utf-8'), { mode: 0o755 });
-    console.log('[Setup] Installed auto-compact hook →', compactHookDest);
+    if (!installed) console.log('[Setup] Synced auto-compact hook →', compactHookDest);
     installed = true;
   }
 
@@ -314,6 +360,9 @@ function installPluginOnStartup(): void {
 async function loadConfigOnStartup(): Promise<void> {
   const config = configService.load();
 
+  // Apply response cache config from disk
+  responseCache.reconfigure(config.responseCache ?? {});
+
   // Reload providers from config (per MAP-03: mappings persist across restarts)
   config.providers.forEach((p: LLMProvider) => {
     providerService.registerProvider(p);
@@ -325,7 +374,13 @@ async function loadConfigOnStartup(): Promise<void> {
   // Write model env file for Claude Code
   writeModelEnvFile();
 
-  console.log(`[Proxy] Loaded ${config.providers.length} providers, ${config.routes.length} routes from ~/.claude/claude-code-proxy/config.json`);
+  prewarmAdapters();
+  logger.info('Adapters pre-warmed');
+
+  logger.info(
+    { providers: config.providers.length, routes: config.routes.length },
+    'Config loaded from ~/.claude/claude-code-proxy/config.json',
+  );
 
   // Sync modelli con context-registry
   contextRegistry.syncFromConfig(config.providers);
@@ -368,14 +423,15 @@ async function loadConfigOnStartup(): Promise<void> {
   const discovery = new LocalDiscoveryService(
     (provider) => {
       // Don't overwrite manually configured providers
-      if (providerService.getProvider(provider.name) && !provider.autoDiscovered) return;
-      providerService.registerProvider({ ...provider, keyId: provider.name });
+      const existing = providerService.getProvider(provider.name);
+      if (existing && !existing.autoDiscovered) return;
+      providerService.registerProvider({ ...provider, keyId: provider.name, autoDiscovered: true });
       contextRegistry.syncFromConfig(configService.load().providers);
     },
     config.discoveryConfig,
   );
   discovery.start();
-  (app as any)._discoveryService = discovery;
+  setDiscoveryService(discovery);
 }
 
 // Serve frontend static files if bundled together (production build)
@@ -406,56 +462,6 @@ app.get('/update-check', async (_req, res) => {
     res.json({ version: data?.version || 'unknown' });
   } catch {
     res.status(502).json({ error: 'Failed to check for updates' });
-  }
-});
-
-// Discovery admin endpoints
-app.get('/admin/discovery', (_req, res) => {
-  const discovery = (app as any)._discoveryService;
-  if (!discovery) return res.json({ enabled: false, providers: [] });
-  res.json({
-    enabled: true,
-    config: discovery.getConfig(),
-    providers: discovery.getDiscoveredProviders(),
-  });
-});
-
-app.post('/admin/discovery/scan', async (_req, res) => {
-  const discovery = (app as any)._discoveryService;
-  if (!discovery) return res.status(503).json({ error: 'Discovery not initialized' });
-  await discovery.scan();
-  res.json({ success: true, providers: discovery.getDiscoveredProviders() });
-});
-
-// Context tracking endpoint
-app.get('/admin/context', (req, res) => {
-  const ctx = contextRegistry.load();
-  const sessionId = req.query.session as string | undefined;
-  const usage = sessionId
-    ? getSessionUsage(sessionId)           // Richiesta esplicita: SOLO quella sessione
-    : getCurrentSessionUsage() || lastContextUsage; // Senza sessione: ultima attiva
-  res.json({ lastUsage: usage || null, config: ctx });
-});
-
-app.put('/admin/context', express.json(), (req, res) => {
-  try {
-    const ctx = contextRegistry.load();
-    // Sostituisce l'intera lista modelli con quella inviata (pruning)
-    if (Array.isArray(req.body.models)) {
-      ctx.models = req.body.models;
-    }
-    // Aggiorna tier Claude
-    if (req.body.claude && typeof req.body.claude === 'object') {
-      for (const [tier, context] of Object.entries(req.body.claude)) {
-        if (['opus', 'sonnet', 'haiku'].includes(tier) && typeof context === 'number') {
-          ctx.claude[tier] = context;
-        }
-      }
-    }
-    contextRegistry.save(ctx);
-    res.json({ success: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
   }
 });
 
@@ -554,7 +560,7 @@ function startHttpsServer(app: express.Application, httpsPort: number): void {
  * L'utente lo esegue con: sudo ~/.claude/claude-code-proxy/scripts/setup-desktop.sh
  */
 function setupSystemProxyRoutes(): void {
-  app.post('/admin/setup-desktop', express.json(), async (_req, res) => {
+  app.post('/admin/setup-desktop', adminAuthMiddleware, express.json(), async (_req, res) => {
     try {
       const certs = ensureCert();
       if (!certs) {
@@ -626,35 +632,46 @@ echo "To verify: curl -sk https://api.anthropic.com/health"
   });
 }
 
+let httpServer: Server | null = null;
+
 /**
  * Start the Express server
  */
 export async function startServer(port: number = DEFAULT_PORT, host: string = DEFAULT_HOST): Promise<void> {
-  // Migrazione prima di tutto: ~/.claude-code-proxy/ → ~/.claude/claude-code-proxy/
   migrateFromOldPath();
-  // Imposta ANTHROPIC_BASE_URL per app GUI (Claude Desktop)
   setupLaunchctlEnv();
-  // Ensure proxy-context.json esiste
   contextRegistry.ensureDefaults();
-  // Load config and validate providers on startup (01-03: per D-13, MAP-03; 02-03: per D-22)
   await loadConfigOnStartup();
+  ensureAdminToken();
 
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, host, () => {
-      console.log(`[Proxy] Claude Code Proxy starting on http://${host}:${port}`);
-      console.log(`[Proxy] Admin API:  http://${host}:${port}/admin`);
-      console.log(`[Proxy] Health:   http://${host}:${port}/health`);
-      console.log(`[Proxy] Proxy:    http://${host}:${port}/v1/*`);
-      // Avvia server HTTPS per Claude Desktop (porta 8743)
+    httpServer = app.listen(port, host, () => {
+      logger.info({ host, port }, 'Claude Code Proxy started');
+      logger.info(`Admin API:  http://${host}:${port}/admin`);
+      logger.info(`Health:   http://${host}:${port}/health`);
+      logger.info(`Proxy:    http://${host}:${port}/v1/*`);
+
+      attachLogWebSocket(httpServer!);
       startHttpsServer(app, 8743);
+
+      setupGracefulShutdown({
+        httpServer: httpServer!,
+        httpsServer,
+        onShutdown: async () => {
+          getDiscoveryService()?.stop();
+          await rateLimiterService.disconnect();
+          closeLogWebSocket();
+        },
+      });
+
       resolve();
     });
 
-    server.on('error', (err: Error) => {
+    httpServer.on('error', (err: Error) => {
       if (err.message.includes('EADDRINUSE')) {
-        console.error(`[Server] Port ${port} is already in use`);
+        logger.error({ port }, 'Port already in use');
       } else {
-        console.error(`[Server] Failed to start:`, err.message);
+        logger.error({ err: err.message }, 'Failed to start server');
       }
       reject(err);
     });

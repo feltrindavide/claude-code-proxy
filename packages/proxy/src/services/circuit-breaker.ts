@@ -1,0 +1,104 @@
+/**
+ * Circuit breaker per provider upstream.
+ */
+
+export type CircuitState = 'closed' | 'open' | 'half-open';
+
+export interface CircuitBreakerConfig {
+  failureThreshold: number;
+  cooldownMs: number;
+}
+
+const DEFAULT_CONFIG: CircuitBreakerConfig = {
+  failureThreshold: 5,
+  cooldownMs: 30_000,
+};
+
+interface ProviderCircuit {
+  state: CircuitState;
+  consecutiveFailures: number;
+  openedAt: number | null;
+}
+
+export class CircuitBreakerService {
+  private circuits = new Map<string, ProviderCircuit>();
+  private config: CircuitBreakerConfig;
+
+  constructor(config?: Partial<CircuitBreakerConfig>) {
+    this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  private getOrCreate(providerName: string): ProviderCircuit {
+    let c = this.circuits.get(providerName);
+    if (!c) {
+      c = { state: 'closed', consecutiveFailures: 0, openedAt: null };
+      this.circuits.set(providerName, c);
+    }
+    return c;
+  }
+
+  private transitionToOpen(c: ProviderCircuit): void {
+    c.state = 'open';
+    c.openedAt = Date.now();
+  }
+
+  /** Check if requests should be allowed for this provider. */
+  canRequest(providerName: string): boolean {
+    const c = this.getOrCreate(providerName);
+    if (c.state === 'closed') return true;
+
+    if (c.state === 'open') {
+      if (c.openedAt && Date.now() - c.openedAt >= this.config.cooldownMs) {
+        c.state = 'half-open';
+        return true;
+      }
+      return false;
+    }
+
+    // half-open: allow probe
+    return true;
+  }
+
+  getState(providerName: string): CircuitState {
+    const c = this.getOrCreate(providerName);
+    if (c.state === 'open' && c.openedAt && Date.now() - c.openedAt >= this.config.cooldownMs) {
+      c.state = 'half-open';
+    }
+    return c.state;
+  }
+
+  recordSuccess(providerName: string): void {
+    const c = this.getOrCreate(providerName);
+    c.consecutiveFailures = 0;
+    c.state = 'closed';
+    c.openedAt = null;
+  }
+
+  recordFailure(providerName: string): void {
+    const c = this.getOrCreate(providerName);
+    if (c.state === 'half-open') {
+      this.transitionToOpen(c);
+      c.consecutiveFailures = this.config.failureThreshold;
+      return;
+    }
+    c.consecutiveFailures++;
+    if (c.consecutiveFailures >= this.config.failureThreshold) {
+      this.transitionToOpen(c);
+    }
+  }
+
+  getAllStates(): Map<string, CircuitState> {
+    const out = new Map<string, CircuitState>();
+    for (const [name] of this.circuits) {
+      out.set(name, this.getState(name));
+    }
+    return out;
+  }
+
+  /** @internal test helper */
+  resetForTests(): void {
+    this.circuits.clear();
+  }
+}
+
+export const circuitBreakerService = new CircuitBreakerService();

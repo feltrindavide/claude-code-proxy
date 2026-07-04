@@ -73,7 +73,7 @@ export class ProviderService {
    * Searches all providers for the given model name
    */
   resolveCustomModel(modelName: string): RouteResolution | null {
-    // Prima prova match esatto
+    // Exact match first
     for (const provider of this.providers.values()) {
       if (!provider.enabled) continue;
       if (provider.models.includes(modelName)) {
@@ -87,20 +87,44 @@ export class ProviderService {
       }
     }
 
-    // Se match esatto fallisce, prova match parziale (es. "glm-4.5-air" matcha "z-ai/glm-4.5-air:free")
+    // Partial match — non-Claude names, min 8 chars, longest match wins
+    const lower = modelName.toLowerCase();
+    const blockedPartial = new Set(['sonnet', 'opus', 'haiku', 'claude', 'anthropic']);
+    if (lower.startsWith('claude-') || modelName.length < 8 || blockedPartial.has(lower)) {
+      return null;
+    }
+
+    let best: { provider: LLMProvider; mId: string; score: number } | null = null;
+
     for (const provider of this.providers.values()) {
       if (!provider.enabled) continue;
       for (const mId of provider.models) {
-        if (mId.toLowerCase().includes(modelName.toLowerCase()) || modelName.toLowerCase().includes(mId.toLowerCase())) {
-          const matchingRoute = this.routes.find(r => r.targetModel === mId && r.providerName === provider.name);
-          return {
-            provider,
-            targetModel: mId,
-            originalModel: modelName,
-            claudeTier: matchingRoute?.claudeTier,
-          };
+        const mLower = mId.toLowerCase();
+        const lastSegment = (mLower.split('/').pop() ?? mLower).split(':')[0];
+        const matches =
+          lastSegment === lower ||
+          lastSegment.endsWith(lower) ||
+          mLower.endsWith(`/${lower}`) ||
+          mLower.endsWith(`:${lower}`);
+        if (!matches) continue;
+
+        const score = mId.length;
+        if (!best || score > best.score) {
+          best = { provider, mId, score };
         }
       }
+    }
+
+    if (best) {
+      const matchingRoute = this.routes.find(
+        r => r.targetModel === best!.mId && r.providerName === best!.provider.name,
+      );
+      return {
+        provider: best.provider,
+        targetModel: best.mId,
+        originalModel: modelName,
+        claudeTier: matchingRoute?.claudeTier,
+      };
     }
 
     return null;

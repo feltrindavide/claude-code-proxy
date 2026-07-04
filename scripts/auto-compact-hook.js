@@ -8,14 +8,58 @@
  * Installato automaticamente da installPluginOnStartup() nel proxy.
  */
 
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+function getAdminHeaders() {
+  try {
+    const token = fs.readFileSync(
+      path.join(os.homedir(), '.claude', 'claude-code-proxy', 'data', 'admin.token'),
+      'utf-8',
+    ).trim();
+    return { 'X-Admin-Token': token };
+  } catch {
+    return {};
+  }
+}
+
+function readStdin() {
+  return new Promise((resolve) => {
+    let input = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => { input += chunk; });
+    process.stdin.on('end', () => { resolve(input || null); });
+    setTimeout(() => resolve(null), 1500);
+  });
+}
+
 async function main() {
   try {
-    const [ctxResp, configResp] = await Promise.all([
-      fetch('http://localhost:3456/admin/context', { signal: AbortSignal.timeout(2000) }),
-      fetch('http://localhost:3456/admin/auto-compact', { signal: AbortSignal.timeout(2000) }),
+    const stdinData = await readStdin();
+    let hookSessionId = '';
+    if (stdinData) {
+      try {
+        const parsed = JSON.parse(stdinData);
+        hookSessionId = parsed.session_id || '';
+      } catch {}
+    }
+
+    const adminHeaders = getAdminHeaders();
+    const [ctxResp, configResp, sessionCtxResp] = await Promise.all([
+      fetch('http://localhost:3456/admin/context', { signal: AbortSignal.timeout(2000), headers: adminHeaders }),
+      fetch('http://localhost:3456/admin/auto-compact', { signal: AbortSignal.timeout(2000), headers: adminHeaders }),
+      hookSessionId
+        ? fetch(
+            `http://localhost:3456/admin/context?session=${encodeURIComponent(hookSessionId)}`,
+            { signal: AbortSignal.timeout(2000), headers: adminHeaders },
+          )
+        : Promise.resolve(null),
     ]);
 
-    if (!ctxResp.ok || !configResp.ok) process.exit(0);
+    if (!ctxResp.ok || !configResp.ok) {
+      process.exit(0);
+    }
 
     const data = await ctxResp.json();
     const { threshold } = await configResp.json();
@@ -53,7 +97,6 @@ async function main() {
       const pctDisplay = Math.round(pct * 100);
       const usedDisplay = Math.round(totalUsed / 1000);
       const maxDisplay = Math.round(maxContext / 1000);
-      const pctLabel = Math.round(compactThreshold * 100);
 
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
