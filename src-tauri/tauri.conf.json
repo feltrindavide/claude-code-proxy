@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri2-schema/main/schema.json",
   "productName": "ClaudeCode Proxy",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "identifier": "com.claudecode.proxy",
   "build": {
     "beforeDevCommand": "",
