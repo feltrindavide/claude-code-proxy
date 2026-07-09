@@ -16,6 +16,10 @@ vi.mock('../../src/services/keychain.js', () => ({
   getKey: vi.fn().mockResolvedValue('test-api-key'),
 }));
 
+vi.mock('../../src/middleware/rateLimitMiddleware.js', () => ({
+  rateLimitMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
 import { upstreamFetch } from '../../src/services/upstream-http.js';
 
 const OLLAMA_PROVIDER = {
