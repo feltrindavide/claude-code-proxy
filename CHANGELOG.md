@@ -2,6 +2,14 @@
 
 All notable changes to Claude Code Proxy are documented in this file.
 
+## [0.7.3] - 2026-07-09
+
+### Fixed
+- **Model picker (Enterprise org)**: `modelOverrides` maps native Claude IDs (`claude-opus-4-8`, etc.) to upstream targets; tier env vars use org-compatible Claude IDs
+- **Status line**: `context-status.js` shows mapped upstream model (e.g. `gemma-4-31b-it`) instead of native Opus/Sonnet labels
+- Picker labels use tier-prefixed `*_MODEL_NAME` / `*_MODEL_DESCRIPTION`; disable gateway model discovery to reduce duplicate entries
+- Sync `availableModels`, env, and overrides into `~/.claude/settings.json` on route save
+
 ## [0.7.2] - 2026-07-09
 
 ### Added

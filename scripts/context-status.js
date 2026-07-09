@@ -1,16 +1,9 @@
 #!/usr/bin/env node
 /**
  * Context status line script for Claude Code Proxy
- * Legge session_id da stdin (passato da Claude Code/OpenCode) per mostrare
- * i dati corretti per la sessione corrente.
+ * Shows the upstream mapped model (not Claude's native Opus/Sonnet label).
  *
- * Formato: z-ai/glm-4.5-air:free │ cartella │ ████░░░░ 45k/131k (35%)
- *
- * Installazione in ~/.claude/settings.json:
- *   "statusLine": {
- *     "type": "command",
- *     "command": "\"...node\" \"...context-status.js\""
- *   }
+ * Formato: gemma-4-31b-it │ cartella │ ████░░░░ 45k/131k (35%)
  */
 
 const BOLD = '\x1b[1m';
@@ -47,13 +40,89 @@ function readStdin() {
   });
 }
 
+function shortLabel(model) {
+  if (!model) return '';
+  const slash = model.lastIndexOf('/');
+  return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
+function isClaudeNativeName(name) {
+  const lower = (name || '').toLowerCase();
+  if (!lower) return false;
+  if (lower.startsWith('claude-')) return true;
+  if (/\b(opus|sonnet|haiku|fable)\b/.test(lower) && !lower.includes('/')) return true;
+  return false;
+}
+
+function inferTier(modelId, displayName) {
+  const text = `${modelId || ''} ${displayName || ''}`.toLowerCase();
+  if (text.includes('fable')) return 'fable';
+  if (text.includes('opus')) return 'opus';
+  if (text.includes('sonnet')) return 'sonnet';
+  if (text.includes('haiku')) return 'haiku';
+  return '';
+}
+
+function loadModelOverrides() {
+  try {
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    return settings.modelOverrides || {};
+  } catch {
+    return {};
+  }
+}
+
+function resolveMappedModel({
+  usageModel,
+  stdinId,
+  stdinDisplay,
+  routes,
+  overrides,
+  usageTier,
+}) {
+  if (usageModel && !isClaudeNativeName(usageModel)) {
+    return shortLabel(usageModel);
+  }
+
+  if (stdinId && overrides[stdinId]) {
+    return shortLabel(overrides[stdinId]);
+  }
+
+  const tier = usageTier || inferTier(stdinId, stdinDisplay);
+  if (tier && routes[tier]?.targetModel) {
+    return shortLabel(routes[tier].targetModel);
+  }
+
+  if (usageModel) return shortLabel(usageModel);
+  return shortLabel(stdinDisplay || stdinId || '');
+}
+
+function resolveContextModelId({
+  usageModel,
+  stdinId,
+  stdinDisplay,
+  routes,
+  overrides,
+  usageTier,
+}) {
+  if (usageModel && !isClaudeNativeName(usageModel)) return usageModel;
+
+  if (stdinId && overrides[stdinId]) return overrides[stdinId];
+
+  const tier = usageTier || inferTier(stdinId, stdinDisplay);
+  if (tier && routes[tier]?.targetModel) return routes[tier].targetModel;
+
+  return usageModel || stdinId || '';
+}
+
 async function main() {
   try {
-    // 1. Leggi stdin (session_id, model, cwd, context_window da Claude Code)
     const stdinData = await readStdin();
     let sessionId = '';
     let folderFromStdin = '';
-    let stdinModel = '';
+    let stdinModelId = '';
+    let stdinModelDisplay = '';
     let stdinCtxInput = 0;
     let stdinCtxOutput = 0;
     let stdinCtxWindow = 0;
@@ -63,8 +132,8 @@ async function main() {
         const parsed = JSON.parse(stdinData);
         sessionId = parsed.session_id || '';
         folderFromStdin = parsed.workspace?.current_dir || '';
-        stdinModel = parsed.model?.display_name || parsed.model?.id || '';
-        // Context window da stdin (stima Claude Code, utile prima della prima richiesta proxy)
+        stdinModelId = parsed.model?.id || '';
+        stdinModelDisplay = parsed.model?.display_name || '';
         if (parsed.context_window) {
           stdinCtxInput = parsed.context_window.total_input_tokens || 0;
           stdinCtxOutput = parsed.context_window.total_output_tokens || 0;
@@ -73,7 +142,6 @@ async function main() {
       } catch {}
     }
 
-    // 2. Fetch contesto dal proxy (per-sessione se abbiamo sessionId)
     const url = sessionId
       ? `${PROXY_URL}/admin/context?session=${encodeURIComponent(sessionId)}`
       : `${PROXY_URL}/admin/context`;
@@ -87,27 +155,41 @@ async function main() {
     const data = await resp.json();
     const usage = data.lastUsage || {};
     const config = data.config || {};
+    const routes = data.routes || {};
+    const overrides = loadModelOverrides();
 
-    // Model: contesto proxy > stdin
-    const model = usage.model || stdinModel || '';
     const tier = usage.tier || '';
-    // Token: proxy > stdin context_window > 0
+    const contextModelId = resolveContextModelId({
+      usageModel: usage.model,
+      stdinId: stdinModelId,
+      stdinDisplay: stdinModelDisplay,
+      routes,
+      overrides,
+      usageTier: tier,
+    });
+    const model = resolveMappedModel({
+      usageModel: usage.model,
+      stdinId: stdinModelId,
+      stdinDisplay: stdinModelDisplay,
+      routes,
+      overrides,
+      usageTier: tier,
+    });
+
     const inputTokens = usage.inputTokens || stdinCtxInput || 0;
     const outputTokens = usage.outputTokens || stdinCtxOutput || 0;
     const totalUsed = inputTokens + outputTokens;
 
-    // Se non c'è niente (no contesto, no stdin model), esci
     if (!model) {
       process.stdout.write(`${BOLD}○${RESET}\n`);
       process.exit(0);
     }
 
-    // 3. Contesto massimo: modello proxy > stdin context_window > tier > default
     let maxContext = 200_000;
     let foundModel = false;
     if (config.models && Array.isArray(config.models)) {
       const entry = config.models.find(
-        (m) => m.id === model || model.includes(m.id),
+        (m) => m.id === contextModelId || contextModelId.includes(m.id),
       );
       if (entry && entry.context) {
         maxContext = entry.context;
@@ -122,11 +204,8 @@ async function main() {
       maxContext = config.claude[tier];
     }
 
-    // 4. Nome cartella: da stdin > process.cwd
     const folder = (folderFromStdin || process.cwd()).split('/').pop() || '';
 
-    // 5. Progress bar (10 segmenti) con colore
-    // Almeno 1 segmento se ci sono token usati
     const pctRaw = (totalUsed / maxContext) * 100;
     const pct = Math.min(100, Math.round(pctRaw));
     const segs = 10;
@@ -147,18 +226,16 @@ async function main() {
 
     const maxCtx = fmt(maxContext);
     const used = fmt(totalUsed);
-    // Mostra 1 decimale per % < 10, intero per % >= 10
     const pctDisplay = pctRaw < 10 ? pctRaw.toFixed(1) : String(pct);
     const pctColor = pct > 80 ? RED : (pct > 50 ? YELLOW : '');
     const pctStr = pctColor ? `${pctColor}${pctDisplay}%${RESET}` : `${pctDisplay}%`;
 
     const folderTag = folder ? ` │ ${folder}` : '';
 
-    // TUTTO in bold, niente dim
     process.stdout.write(
       `${BOLD}${model}${folderTag} │ ${bar} ${used}/${maxCtx} (${pctStr})${RESET}\n`,
     );
-  } catch (err) {
+  } catch {
     process.stdout.write(`${BOLD}⚠ proxy offline${RESET}\n`);
   }
 }

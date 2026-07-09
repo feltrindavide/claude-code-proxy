@@ -22,35 +22,51 @@ describe('writeModelEnvFile', () => {
     rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it('writes upstream target models and Fable mapping from routes', async () => {
+  it('uses Claude tier IDs in env and modelOverrides for upstream routing', async () => {
     const { providerService } = await import('../../src/services/provider.js');
     providerService.setRoutes([
-      { claudeTier: 'opus', providerName: 'nvidia-nim', targetModel: 'google/gemma-4-31b-it' },
-      { claudeTier: 'sonnet', providerName: 'nvidia-nim', targetModel: 'z-ai/glm-5.2' },
-      { claudeTier: 'haiku', providerName: 'nvidia-nim', targetModel: 'moonshotai/kimi-k2.6' },
-      { claudeTier: 'fable', providerName: 'nvidia-nim', targetModel: 'deepseek-ai/deepseek-v4-pro' },
+      { claudeTier: 'opus', providerName: 'opencode', targetModel: 'qwen3.6' },
+      { claudeTier: 'sonnet', providerName: 'opencode', targetModel: 'qwen3.6' },
+      { claudeTier: 'haiku', providerName: 'opencode', targetModel: 'nemotron' },
+      { claudeTier: 'fable', providerName: 'opencode', targetModel: 'qwen3.6' },
     ]);
 
-    const { writeModelEnvFile } = await import('../../src/services/modelEnv.js');
+    const { writeModelEnvFile, CLAUDE_TIER_IDS } = await import('../../src/services/modelEnv.js');
     writeModelEnvFile();
 
     const envPath = join(tempHome, '.claude', 'claude-code-proxy', 'models.sh');
-    expect(existsSync(envPath)).toBe(true);
     const content = readFileSync(envPath, 'utf-8');
-    expect(content).toContain('ANTHROPIC_DEFAULT_MODEL="z-ai/glm-5.2"');
-    expect(content).toContain('ANTHROPIC_DEFAULT_OPUS_MODEL="google/gemma-4-31b-it"');
-    expect(content).toContain('ANTHROPIC_DEFAULT_SONNET_MODEL="z-ai/glm-5.2"');
-    expect(content).toContain('ANTHROPIC_DEFAULT_HAIKU_MODEL="moonshotai/kimi-k2.6"');
-    expect(content).toContain('ANTHROPIC_DEFAULT_FABLE_MODEL="deepseek-ai/deepseek-v4-pro"');
-    expect(content).toContain('ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="gemma-4-31b-it"');
-    expect(content).not.toContain('claude-opus-4-20250514');
+    expect(content).toContain(`ANTHROPIC_DEFAULT_OPUS_MODEL="${CLAUDE_TIER_IDS.opus}"`);
+    expect(content).toContain('ANTHROPIC_DEFAULT_OPUS_MODEL_NAME="Opus · qwen3.6"');
+    expect(content).toContain('ANTHROPIC_DEFAULT_FABLE_MODEL_NAME="Fable 5 · qwen3.6"');
+    expect(content).not.toContain('ANTHROPIC_DEFAULT_OPUS_MODEL="qwen3.6"');
+
+    const settings = JSON.parse(
+      readFileSync(join(tempHome, '.claude', 'settings.json'), 'utf-8'),
+    );
+    expect(settings.modelOverrides['claude-opus-4-8']).toBe('qwen3.6');
+    expect(settings.modelOverrides['claude-fable-5']).toBe('qwen3.6');
+    expect(settings.modelOverrides['claude-haiku-4-5-20251001']).toBe('nemotron');
+    expect(settings.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:3456');
   });
 });
 
-describe('shortModelLabel', () => {
-  it('strips provider namespace from model id', async () => {
-    const { shortModelLabel } = await import('../../src/services/modelEnv.js');
-    expect(shortModelLabel('google/gemma-4-31b-it')).toBe('gemma-4-31b-it');
-    expect(shortModelLabel('plain-model')).toBe('plain-model');
+describe('buildModelOverrides', () => {
+  it('maps all known Anthropic IDs for a tier', async () => {
+    const { buildModelOverrides } = await import('../../src/services/modelEnv.js');
+    const routes = new Map([
+      ['opus', { claudeTier: 'opus', providerName: 'p', targetModel: 'm-opus' }],
+    ] as const);
+    const overrides = buildModelOverrides(routes as any);
+    expect(overrides['claude-opus-4-8']).toBe('m-opus');
+    expect(overrides['claude-opus-4-20250514']).toBe('m-opus');
+  });
+});
+
+describe('tierModelName', () => {
+  it('prefixes tier so duplicate upstream models stay distinct', async () => {
+    const { tierModelName } = await import('../../src/services/modelEnv.js');
+    expect(tierModelName('opus', 'qwen3.6')).toBe('Opus · qwen3.6');
+    expect(tierModelName('fable', 'qwen3.6')).toBe('Fable 5 · qwen3.6');
   });
 });

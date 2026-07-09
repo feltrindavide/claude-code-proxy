@@ -881,7 +881,17 @@ router.get('/context', (req, res) => {
   const usage = sessionId
     ? getSessionUsage(sessionId)
     : getCurrentSessionUsage() || lastContextUsage;
-  res.json({ lastUsage: usage || null, config: ctx });
+  const routes = configService.load().routes.reduce<
+    Record<string, { providerName: string; targetModel: string }>
+  >((acc, route) => {
+    if (!route.providerName?.trim() || !route.targetModel?.trim()) return acc;
+    acc[route.claudeTier] = {
+      providerName: route.providerName,
+      targetModel: route.targetModel,
+    };
+    return acc;
+  }, {});
+  res.json({ lastUsage: usage || null, config: ctx, routes });
 });
 
 router.put('/context', expressJson(), (req, res) => {
