@@ -106,7 +106,7 @@ export function ContextEditor() {
               </tr>
             </thead>
             <tbody>
-              {['opus', 'sonnet', 'haiku'].map((tier) => (
+              {['opus', 'sonnet', 'haiku', 'fable'].map((tier) => (
                 <tr key={tier} className="border-b border-hairline last:border-b-0">
                   <td className="py-3 pr-4">
                     <span className="font-mono text-sm text-ink capitalize">{tier}</span>

@@ -1,6 +1,6 @@
 /** Shared types between proxy and dashboard (keep in sync with packages/proxy/src/types). */
 
-export type ClaudeTier = 'opus' | 'sonnet' | 'haiku';
+export type ClaudeTier = 'opus' | 'sonnet' | 'haiku' | 'fable';
 
 export interface LLMProvider {
   name: string;

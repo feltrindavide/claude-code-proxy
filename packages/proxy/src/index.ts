@@ -28,7 +28,7 @@ import { validationStoreService } from './services/validationStore.js';
 import adminRouter from './routes/admin.js';
 import type { LLMProvider, ModelRoute } from './types/index.js';
 
-import { writeModelEnvFile } from './services/modelEnv.js';
+import { writeModelEnvFile, shortModelLabel } from './services/modelEnv.js';
 import { LocalDiscoveryService } from './services/local-discovery.js';
 import { responseCache } from './services/response-cache.js';
 import { ensureAdminToken } from './services/admin-auth.js';
@@ -131,7 +131,7 @@ export function createApp(options?: { mountAdmin?: boolean }): express.Applicati
       data.push({
         type: 'model',
         id: `anthropic/${route.providerName}/${route.targetModel}`,
-        display_name: route.targetModel,
+        display_name: shortModelLabel(route.targetModel),
         created_at: new Date().toISOString(),
       });
     }

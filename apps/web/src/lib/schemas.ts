@@ -26,7 +26,7 @@ export type ApiProvider = z.output<typeof ProviderSchema>;
 export const ProvidersArraySchema = z.array(ProviderSchema);
 
 export const RouteEntrySchema = z.object({
-  claudeTier: z.enum(['opus', 'sonnet', 'haiku']),
+  claudeTier: z.enum(['opus', 'sonnet', 'haiku', 'fable']),
   providerName: z.string(),
   targetModel: z.string(),
 });

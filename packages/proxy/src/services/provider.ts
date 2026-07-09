@@ -157,6 +157,7 @@ export class ProviderService {
   private extractTier(modelName: string): ClaudeTier | null {
     const lower = modelName.toLowerCase();
 
+    if (lower.startsWith('claude-fable') || lower === 'fable') return 'fable';
     if (lower.startsWith('claude-opus')) return 'opus';
     if (lower.startsWith('claude-sonnet')) return 'sonnet';
     if (lower.startsWith('claude-haiku')) return 'haiku';

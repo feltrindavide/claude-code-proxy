@@ -105,7 +105,7 @@ const providerSchema = z.object({
 });
 
 const routeSchema = z.object({
-  claudeTier: z.enum(['opus', 'sonnet', 'haiku']),
+  claudeTier: z.enum(['opus', 'sonnet', 'haiku', 'fable']),
   providerName: providerNameSchema,
   targetModel: modelNameSchema,
 });
@@ -117,7 +117,7 @@ const rateLimitSchema = z.object({
 
 const routeExperimentSchema = z.object({
   id: z.string().min(1).max(50),
-  tier: z.enum(['opus', 'sonnet', 'haiku']),
+  tier: z.enum(['opus', 'sonnet', 'haiku', 'fable']),
   enabled: z.boolean(),
   variants: z.array(z.object({
     name: z.string().min(1).max(50),
@@ -892,7 +892,7 @@ router.put('/context', expressJson(), (req, res) => {
     }
     if (req.body.claude && typeof req.body.claude === 'object') {
       for (const [tier, context] of Object.entries(req.body.claude)) {
-        if (['opus', 'sonnet', 'haiku'].includes(tier) && typeof context === 'number') {
+        if (['opus', 'sonnet', 'haiku', 'fable'].includes(tier) && typeof context === 'number') {
           ctx.claude[tier] = context;
         }
       }
@@ -960,7 +960,7 @@ router.post('/onboarding/complete', (_req, res) => {
 const benchmarkSchema = z.object({
   providerName: z.string().min(1),
   targetModel: z.string().min(1),
-  tier: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+  tier: z.enum(['opus', 'sonnet', 'haiku', 'fable']).optional(),
 });
 
 /**

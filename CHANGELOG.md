@@ -2,6 +2,16 @@
 
 All notable changes to Claude Code Proxy are documented in this file.
 
+## [0.7.2] - 2026-07-09
+
+### Added
+- Dedicated **Fable 5** tier in Model Mapping UI (maps to `ANTHROPIC_DEFAULT_FABLE_MODEL`)
+- Route resolution for `claude-fable-5` and `fable` model aliases
+
+### Fixed
+- **Automode**: boost `max_tokens` for haiku-tier classifier requests (not only DeepSeek)
+- **Model picker**: `models.sh` again exports upstream target models and `*_MODEL_NAME` labels instead of hardcoded Claude tier IDs
+
 ## [0.7.1] - 2026-07-09
 
 ### Fixed

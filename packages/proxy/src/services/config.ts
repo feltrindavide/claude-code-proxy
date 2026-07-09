@@ -73,16 +73,16 @@ const routeCandidateSchema = z.object({
 });
 
 const modelRouteSchema = z.object({
-  claudeTier: z.enum(['opus', 'sonnet', 'haiku']),
+  claudeTier: z.enum(['opus', 'sonnet', 'haiku', 'fable']),
   providerName: providerNameSchema,
   targetModel: modelNameSchema,
   candidates: z.array(routeCandidateSchema).optional(),
-  tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku'])).optional(),
+  tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku', 'fable'])).optional(),
 });
 
 const routeExperimentSchema = z.object({
   id: z.string().min(1).max(50),
-  tier: z.enum(['opus', 'sonnet', 'haiku']),
+  tier: z.enum(['opus', 'sonnet', 'haiku', 'fable']),
   enabled: z.boolean(),
   variants: z.array(z.object({
     name: z.string().min(1).max(50),
@@ -106,7 +106,7 @@ export const proxyConfigSchema = z.object({
   aliases: z.record(z.string()).optional(),
   experiments: z.array(routeExperimentSchema).optional(),
   routing: z.object({
-    tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku'])).optional(),
+    tierFallback: z.array(z.enum(['opus', 'sonnet', 'haiku', 'fable'])).optional(),
     preferLowLatency: z.boolean().optional(),
     preferLowCost: z.boolean().optional(),
   }).optional(),

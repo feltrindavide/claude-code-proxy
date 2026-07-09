@@ -11,14 +11,16 @@ const tierLabels: Record<string, string> = {
   opus: 'Opus',
   sonnet: 'Sonnet',
   haiku: 'Haiku',
+  fable: 'Fable 5',
 };
 
-type Tier = 'opus' | 'sonnet' | 'haiku';
+type Tier = 'opus' | 'sonnet' | 'haiku' | 'fable';
 
 interface RouteMap {
   opus?: { providerName: string; targetModel: string };
   sonnet?: { providerName: string; targetModel: string };
   haiku?: { providerName: string; targetModel: string };
+  fable?: { providerName: string; targetModel: string };
 }
 
 export function ModelBenchmark() {
@@ -69,7 +71,7 @@ export function ModelBenchmark() {
   }
 
   async function runAll() {
-    for (const tier of ['opus', 'sonnet', 'haiku'] as Tier[]) {
+    for (const tier of ['opus', 'sonnet', 'haiku', 'fable'] as Tier[]) {
       if (routes[tier]?.providerName) {
         await handleBenchmark(tier);
       }
@@ -93,7 +95,7 @@ export function ModelBenchmark() {
         </Button>
       </div>
 
-      {(['opus', 'sonnet', 'haiku'] as Tier[]).map((tier) => {
+      {(['opus', 'sonnet', 'haiku', 'fable'] as Tier[]).map((tier) => {
         const route = routes[tier];
         const result = results[tier];
         return (

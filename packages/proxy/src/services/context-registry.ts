@@ -132,6 +132,7 @@ const DEFAULT_CONTEXT: ProxyContext = {
     opus: 1_000_000,
     sonnet: 1_000_000,
     haiku: 200_000,
+    fable: 1_000_000,
   },
 };
 

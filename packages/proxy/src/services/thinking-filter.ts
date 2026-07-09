@@ -98,6 +98,7 @@ export function resolveThinkingMode(
 
   // Fall back to tier config
   if (tier === 'opus') return cfg.opus?.mode || 'passthrough';
+  if (tier === 'fable') return cfg.opus?.mode || 'passthrough';
   if (tier === 'sonnet') return cfg.sonnet?.mode || 'passthrough';
   if (tier === 'haiku') return cfg.haiku?.mode || 'strip';
 

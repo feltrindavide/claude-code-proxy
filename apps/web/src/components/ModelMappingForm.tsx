@@ -17,7 +17,7 @@ interface Provider {
 }
 
 interface RouteEntry {
-  claudeTier: 'opus' | 'sonnet' | 'haiku';
+  claudeTier: 'opus' | 'sonnet' | 'haiku' | 'fable';
   providerName: string;
   targetModel: string;
 }
@@ -26,12 +26,14 @@ const tierLabels: Record<string, string> = {
   opus: 'Opus',
   sonnet: 'Sonnet',
   haiku: 'Haiku',
+  fable: 'Fable 5',
 };
 
 const defaultRoutes: RouteEntry[] = [
   { claudeTier: 'opus', providerName: '', targetModel: '' },
   { claudeTier: 'sonnet', providerName: '', targetModel: '' },
   { claudeTier: 'haiku', providerName: '', targetModel: '' },
+  { claudeTier: 'fable', providerName: '', targetModel: '' },
 ];
 
 export function ModelMappingForm() {
@@ -153,7 +155,9 @@ export function ModelMappingForm() {
     <div className="max-w-2xl mx-auto">
       <h2 className="font-display text-[22px] text-ink mb-lg">Model Mapping</h2>
       <p className="text-body text-muted mb-lg">
-        Map Claude tiers to providers and models. Models come from the <a href="/models" className="text-primary hover:underline">Model Library</a>.
+        Map Claude tiers to providers and models. Models come from the{' '}
+        <a href="/models" className="text-primary hover:underline">Model Library</a>.
+        Fable 5 maps to <code className="font-mono text-small">ANTHROPIC_DEFAULT_FABLE_MODEL</code> in Claude Code.
       </p>
 
       {/* Tier mappings */}

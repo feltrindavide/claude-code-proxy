@@ -90,6 +90,7 @@ export function RoutingLogTable() {
           <option value="opus">Opus</option>
           <option value="sonnet">Sonnet</option>
           <option value="haiku">Haiku</option>
+          <option value="fable">Fable</option>
         </select>
 
         <select

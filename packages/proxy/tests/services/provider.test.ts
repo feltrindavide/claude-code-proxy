@@ -89,6 +89,17 @@ describe('ProviderService', () => {
       expect(resolution?.targetModel).toBe('nemotron-3-super-120b-a12b:free');
     });
 
+    it('resolves claude-fable-5 to fable tier route', () => {
+      providerService.setRoutes([
+        ...mockRoutes,
+        { claudeTier: 'fable', providerName: 'openrouter', targetModel: 'mimo-v2-flash' },
+      ]);
+      const resolution = providerService.resolveModelRoute('claude-fable-5');
+      expect(resolution).not.toBeNull();
+      expect(resolution?.claudeTier).toBe('fable');
+      expect(resolution?.targetModel).toBe('mimo-v2-flash');
+    });
+
     it('returns null when no route configured for model', () => {
       const resolution = providerService.resolveModelRoute('unknown-model');
       expect(resolution).toBeNull();

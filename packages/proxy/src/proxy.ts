@@ -45,30 +45,66 @@ class StreamFailoverError extends Error {
   }
 }
 
+const CONCISE_SYSTEM_PROMPT =
+  'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.';
+
+const HIGH_REASONING_MODEL_FRAGMENTS = [
+  'deepseek',
+  'deepseek-r1',
+  'deepseek-v4',
+  'kimi',
+  'glm',
+  'qwen',
+  'nemotron',
+  'minimax',
+  'gemma',
+];
+
+/** Automode classifier and similar probes use haiku + a tiny max_tokens budget. */
+export function shouldBoostSmallTokenBudget(
+  resolution: RouteResolution,
+  originalMaxTokens: number | undefined,
+): boolean {
+  if (originalMaxTokens === undefined || originalMaxTokens > 200) return false;
+
+  if (resolution.claudeTier === 'haiku') return true;
+
+  const target = resolution.targetModel.toLowerCase();
+  return HIGH_REASONING_MODEL_FRAGMENTS.some((fragment) => target.includes(fragment));
+}
+
+function prependConciseSystemPrompt(providerBody: Record<string, unknown>): void {
+  const messages = (providerBody.messages as Array<{ role?: string; content?: unknown }>) || [];
+  const alreadyPresent = messages.some(
+    (m) =>
+      m.role === 'system' &&
+      typeof m.content === 'string' &&
+      m.content.includes('Answer directly and concisely'),
+  );
+  if (alreadyPresent) return;
+
+  providerBody.messages = [{ role: 'system', content: CONCISE_SYSTEM_PROMPT }, ...messages];
+}
+
 /** Apply max_tokens boost/clamp before upstream fetch (must run before JSON.stringify). */
 export function applyProviderBodyAdjustments(
   providerBody: Record<string, unknown>,
   resolution: RouteResolution,
   reqLog: ReturnType<typeof createRequestLogger>,
 ): void {
-  const highReasoningModels = ['deepseek', 'deepseek-r1', 'deepseek-v4'];
-  const needsBoost = highReasoningModels.some((m) =>
-    resolution.targetModel.toLowerCase().includes(m),
-  );
   const originalMaxTokens = providerBody.max_tokens as number | undefined;
-  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens <= 200) {
+  if (shouldBoostSmallTokenBudget(resolution, originalMaxTokens)) {
     const boosted = 4096;
     providerBody.max_tokens = boosted;
-    providerBody.messages = [
-      {
-        role: 'system',
-        content: 'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.',
-      },
-      ...((providerBody.messages as unknown[]) || []),
-    ];
+    prependConciseSystemPrompt(providerBody);
     reqLog.info(
-      { from: originalMaxTokens, to: boosted, model: resolution.targetModel },
-      'Boosted max_tokens for reasoning overhead',
+      {
+        from: originalMaxTokens,
+        to: boosted,
+        model: resolution.targetModel,
+        tier: resolution.claudeTier,
+      },
+      'Boosted max_tokens for automode classifier / reasoning overhead',
     );
   }
 

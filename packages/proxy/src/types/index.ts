@@ -4,7 +4,7 @@
  * Plan: 01-01
  */
 
-export type ClaudeTier = 'opus' | 'sonnet' | 'haiku';
+export type ClaudeTier = 'opus' | 'sonnet' | 'haiku' | 'fable';
 
 export type CostTier = 'free' | 'cheap' | 'standard' | 'premium';
 

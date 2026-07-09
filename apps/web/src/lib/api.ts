@@ -310,7 +310,7 @@ export async function saveRoutes(routes: Array<{
 export async function fetchConfig(): Promise<{
   providers: ApiProvider[];
   routes: Array<{
-    claudeTier: 'opus' | 'sonnet' | 'haiku';
+    claudeTier: 'opus' | 'sonnet' | 'haiku' | 'fable';
     providerName: string;
     targetModel: string;
   }>;
@@ -810,7 +810,7 @@ export interface BenchmarkResult {
 export async function runBenchmark(params: {
   providerName: string;
   targetModel: string;
-  tier?: 'opus' | 'sonnet' | 'haiku';
+  tier?: 'opus' | 'sonnet' | 'haiku' | 'fable';
 }): Promise<BenchmarkResult> {
   const response = await adminFetch(`${getProxyHttpBase()}/admin/benchmark`, {
     method: 'POST',

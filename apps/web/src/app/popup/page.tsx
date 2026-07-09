@@ -15,6 +15,7 @@ const TIERS = [
   { tier: 'opus', label: 'Opus', color: '#ff9f0a' },
   { tier: 'sonnet', label: 'Son', color: '#5ac8fa' },
   { tier: 'haiku', label: 'Hai', color: '#34c759' },
+  { tier: 'fable', label: 'Fab', color: '#ff6b35' },
 ];
 
 interface RouteEntry { claudeTier: string; providerName: string; targetModel: string; }

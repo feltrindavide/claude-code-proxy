@@ -30,6 +30,7 @@ const TIER_COST_PREFERENCE: Record<ClaudeTier, CostTier[]> = {
   haiku: ['free', 'cheap', 'standard', 'premium'],
   sonnet: ['cheap', 'standard', 'free', 'premium'],
   opus: ['premium', 'standard', 'cheap', 'free'],
+  fable: ['premium', 'standard', 'cheap', 'free'],
 };
 
 export function inferCostTier(modelId: string, explicit?: CostTier): CostTier {
