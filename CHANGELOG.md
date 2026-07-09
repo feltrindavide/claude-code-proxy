@@ -2,6 +2,11 @@
 
 All notable changes to Claude Code Proxy are documented in this file.
 
+## [0.7.1] - 2026-07-09
+
+### Fixed
+- Tray menu and popup opened dashboard on `:3457` (dev-only); production app now opens `http://localhost:3456` where the bundled UI is served
+
 ## [0.7.0] - 2026-07-09
 
 ### Added
