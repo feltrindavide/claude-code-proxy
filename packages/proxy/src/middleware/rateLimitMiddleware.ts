@@ -28,6 +28,11 @@ function waitForResponseEnd(res: Response): Promise<void> {
       res.removeListener('finish', done);
       res.removeListener('close', done);
       res.removeListener('error', onError);
+      // supertest may emit error after response is already delivered
+      if (res.writableFinished || res.headersSent) {
+        resolve();
+        return;
+      }
       reject(err);
     };
     res.once('finish', done);
