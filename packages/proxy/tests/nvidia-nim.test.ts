@@ -71,6 +71,34 @@ describe('NvidiaNimAdapter', () => {
     expect(body.stream).toBe(true);
   });
 
+  it('strips context_management (unsupported by NVIDIA NIM)', () => {
+    const adapter = new NvidiaNimAdapter();
+    const body = adapter.transformRequest(
+      {
+        model: 'claude-sonnet-4-20250514',
+        messages: [{ role: 'user', content: 'hello' }],
+        context_management: [
+          { type: 'clear_tool_uses', trigger: { type: 'input_tokens', value: 100000 } },
+        ],
+      },
+      {
+        provider: {
+          name: 'nvidia-nim',
+          baseUrl: 'https://integrate.api.nvidia.com',
+          keyId: 'nvidia-nim',
+          models: [],
+          enabled: true,
+          priority: 1,
+          providerType: 'nvidia-nim',
+        },
+        targetModel: 'google/gemma-4-31b-it',
+        originalModel: 'claude-sonnet-4-20250514',
+      },
+    );
+
+    expect(body.context_management).toBeUndefined();
+  });
+
   it('preserves explicit max_tokens', () => {
     const adapter = new NvidiaNimAdapter();
     const body = adapter.transformRequest(

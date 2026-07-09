@@ -33,6 +33,7 @@ import { resolveThinkingMode, filterThinkingEvent, AutoModeDetector, ThinkingBlo
 import { resolveRequest } from './services/route-resolver.js';
 import { upstreamFetch } from './services/upstream-http.js';
 import { joinProviderUrl } from './services/provider-url.js';
+import { stripAnthropicOnlyChatFields } from './services/openai-body-sanitize.js';
 import { registerActiveStream } from './services/shutdown.js';
 import { proxyCacheHitsTotal, proxyExperimentRequestsTotal } from './metrics/prometheus.js';
 import { createRequestLogger, logger } from './lib/logger.js';
@@ -366,6 +367,9 @@ export async function handleProxyRequest(
     const providerType = resolution.provider.providerType || resolution.provider.name;
     adapter = getOrCreateAdapter(providerType, resolution.provider.baseUrl);
     providerBody = adapter.transformRequest(body, resolution);
+    if (adapter.apiPath !== '/v1/messages') {
+      stripAnthropicOnlyChatFields(providerBody);
+    }
     applyProviderBodyAdjustments(providerBody, resolution, reqLog);
     const resolvedApiKey = apiKey;
 

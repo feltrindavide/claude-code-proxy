@@ -2,6 +2,12 @@
 
 All notable changes to Claude Code Proxy are documented in this file.
 
+## [0.7.4] - 2026-07-09
+
+### Fixed
+- **NVIDIA NIM**: strip Anthropic-only `context_management` (and related fields) before OpenAI chat/completions upstream requests — fixes 400 from integrate.api.nvidia.com
+- Central sanitization in proxy handler for all `/v1/chat/completions` adapters; removed passthrough from OpenCode and Custom adapters
+
 ## [0.7.3] - 2026-07-09
 
 ### Fixed

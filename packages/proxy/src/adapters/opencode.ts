@@ -201,9 +201,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
     if (body.max_tokens !== undefined) result.max_tokens = body.max_tokens;
     if (body.temperature !== undefined) result.temperature = body.temperature;
 
-    // Pass through context_management for providers that support it (OpenCode, etc.)
-    if (body.context_management) result.context_management = body.context_management;
-
     if (body.tools && body.tools.length > 0) {
       result.tools = body.tools.map((t) => ({
         type: 'function',

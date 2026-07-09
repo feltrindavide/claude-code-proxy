@@ -29,6 +29,8 @@ export class NvidiaNimAdapter extends OpenCodeAdapter {
     if (result.max_tokens === undefined || (result.max_tokens as number) <= 0) {
       result.max_tokens = DEFAULT_MAX_TOKENS;
     }
+    // NVIDIA NIM OpenAI API rejects Anthropic-only fields from Claude Code
+    delete result.context_management;
     return result;
   }
 

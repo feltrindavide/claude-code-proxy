@@ -80,4 +80,18 @@ describe('OpenCodeAdapter', () => {
     expect(messages[0]).toEqual({ role: 'system', content: 'You are helpful.' });
     expect(messages[1]).toEqual({ role: 'user', content: 'Hi' });
   });
+
+  it('does not forward context_management to OpenAI chat body', () => {
+    const adapter = new OpenCodeAdapter();
+    const body = adapter.transformRequest(
+      {
+        model: 'claude-opus-4-20250514',
+        messages: [{ role: 'user', content: 'Hi' }],
+        context_management: [{ type: 'compact', maxTokens: 100000 }],
+      },
+      route,
+    );
+
+    expect(body.context_management).toBeUndefined();
+  });
 });
