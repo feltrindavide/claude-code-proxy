@@ -18,3 +18,14 @@ export function setProxyHttpBaseFromPort(port: number | null | undefined): void 
 export function setProxyHttpBase(url: string): void {
   httpBase = url.replace(/\/$/, '');
 }
+
+/** Dashboard UI base — Next dev server in development, proxy static export in production. */
+export function getDashboardBase(): string {
+  if (typeof window !== 'undefined') {
+    const { hostname, port } = window.location;
+    if (hostname === 'localhost' && port === '3457') {
+      return 'http://localhost:3457';
+    }
+  }
+  return getProxyHttpBase();
+}

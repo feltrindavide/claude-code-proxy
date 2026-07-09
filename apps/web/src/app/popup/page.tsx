@@ -9,7 +9,7 @@ import {
   stopProxy,
 } from '@/lib/api';
 import { DiscoveryStatusSchema, HealthResponseSchema, ProvidersArraySchema, RoutesResponseSchema } from '@/lib/schemas';
-import { getProxyHttpBase } from '@/lib/proxyBase';
+import { getProxyHttpBase, getDashboardBase } from '@/lib/proxyBase';
 
 const TIERS = [
   { tier: 'opus', label: 'Opus', color: '#ff9f0a' },
@@ -197,13 +197,13 @@ export default function PopupPage() {
       )}
 
       <div style={{ display: 'flex', gap: 5 }}>
-        <button type="button" onClick={() => openUrl('http://localhost:3457')}
+        <button type="button" onClick={() => openUrl(getDashboardBase())}
           aria-label="Open dashboard"
           style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Dashboard
         </button>
-        <button type="button" onClick={() => openUrl('http://localhost:3457/settings')}
+        <button type="button" onClick={() => openUrl(`${getDashboardBase()}/settings`)}
           aria-label="Open settings"
           style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>

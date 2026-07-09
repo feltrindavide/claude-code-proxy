@@ -495,7 +495,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |_app, event| {
                     match event.id().as_ref() {
-                        "dashboard" => open_url("http://localhost:3457"),
+                        "dashboard" => open_url(&format!("http://localhost:{PROXY_PORT}")),
                         "quit" => {
                             let state = handle_menu.state::<ProxyState>();
                             kill_tracked_process(&state);
