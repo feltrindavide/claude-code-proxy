@@ -16,7 +16,7 @@ import {
   unlinkSync,
   readdirSync,
 } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import os from 'os';
 import {
   randomBytes,
@@ -215,8 +215,9 @@ export class RequestLogService {
   }
 
   private persist(): void {
-    if (!existsSync(LOG_DIR)) {
-      mkdirSync(LOG_DIR, { recursive: true, mode: 0o700 });
+    const logDir = dirname(this.logFile);
+    if (!existsSync(logDir)) {
+      mkdirSync(logDir, { recursive: true, mode: 0o700 });
     }
 
     const tempPath = `${this.logFile}.tmp`;
