@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { providerService } from '../../src/services/provider.js';
+import { _resetClientRateLimitsForTests } from '../../src/middleware/clientRateLimit.js';
 
 vi.mock('../../src/services/upstream-http.js', () => ({
   upstreamFetch: vi.fn(),
@@ -16,6 +17,22 @@ vi.mock('../../src/services/keychain.js', () => ({
 }));
 
 import { upstreamFetch } from '../../src/services/upstream-http.js';
+
+const OLLAMA_PROVIDER = {
+  name: 'ollama',
+  baseUrl: 'http://localhost:11434',
+  keyId: 'ollama',
+  models: ['llama3'],
+  enabled: true,
+  priority: 1,
+  providerType: 'ollama',
+} as const;
+
+const HAIKU_ROUTE = {
+  claudeTier: 'haiku' as const,
+  providerName: 'ollama',
+  targetModel: 'llama3',
+};
 
 function mockUpstreamSse(text: string): Response {
   const sse = [
@@ -48,22 +65,12 @@ function mockUpstreamSse(text: string): Response {
   );
 }
 
-describe('POST /v1/messages (mock upstream)', () => {
+describe.sequential('POST /v1/messages (mock upstream)', () => {
   beforeEach(() => {
     vi.mocked(upstreamFetch).mockReset();
+    _resetClientRateLimitsForTests();
 
-    providerService.registerProvider({
-      name: 'ollama',
-      baseUrl: 'http://localhost:11434',
-      keyId: 'ollama',
-      models: ['llama3'],
-      enabled: true,
-      priority: 1,
-      providerType: 'ollama',
-    });
-    providerService.setRoutes([
-      { claudeTier: 'haiku', providerName: 'ollama', targetModel: 'llama3' },
-    ]);
+    providerService.reload([{ ...OLLAMA_PROVIDER }], [{ ...HAIKU_ROUTE }]);
 
     vi.mocked(upstreamFetch).mockResolvedValue(mockUpstreamSse('Hello from mock'));
   });
@@ -81,7 +88,7 @@ describe('POST /v1/messages (mock upstream)', () => {
         stream: false,
       });
 
-    expect(response.status).toBe(200);
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
     expect(response.body.role).toBe('assistant');
     expect(response.body.content?.[0]?.text).toContain('Hello from mock');
     expect(upstreamFetch).toHaveBeenCalled();
