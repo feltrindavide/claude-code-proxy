@@ -7,7 +7,6 @@ import {
   createCipheriv,
   createDecipheriv,
   randomBytes,
-  scryptSync,
 } from 'crypto';
 import { execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
@@ -16,9 +15,6 @@ import { join } from 'path';
 
 const KEYCHAIN_SERVICE = 'claude-code-proxy';
 const KEYCHAIN_ACCOUNT = 'secrets-master-key';
-
-// Legacy XOR obfuscation (v1) — migrated on load
-const LEGACY_OBFUSCATION_KEY = 'ccp-2024-local-proxy-key-do-not-share';
 
 function configDir(): string {
   return join(homedir(), '.claude', 'claude-code-proxy');
@@ -35,7 +31,7 @@ interface EncryptedEntry {
   data: string;
 }
 
-type StoredSecrets = Record<string, string | EncryptedEntry>;
+type StoredSecrets = Record<string, EncryptedEntry>;
 
 function ensureDataDir(): void {
   const dir = join(configDir(), 'data');
@@ -44,10 +40,22 @@ function ensureDataDir(): void {
   }
 }
 
+class KeychainUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KeychainUnavailableError';
+  }
+}
+
 function getMasterKey(): Buffer {
-  // Avoid slow Keychain prompts in vitest / headless environments
   if (process.env.VITEST === 'true') {
-    return scryptSync(configDir(), 'ccp-fallback-salt-v2', 32);
+    const testKey = process.env.CCP_TEST_MASTER_KEY;
+    if (testKey && /^[0-9a-f]{64}$/i.test(testKey)) {
+      return Buffer.from(testKey, 'hex');
+    }
+    const generated = randomBytes(32);
+    process.env.CCP_TEST_MASTER_KEY = generated.toString('hex');
+    return generated;
   }
 
   try {
@@ -59,7 +67,7 @@ function getMasterKey(): Buffer {
       return Buffer.from(existing, 'hex');
     }
   } catch {
-    // Keychain miss — create or fall through
+    // Keychain miss — create below
   }
 
   const key = randomBytes(32);
@@ -70,17 +78,10 @@ function getMasterKey(): Buffer {
     );
     return key;
   } catch {
-    console.warn('[SecretStore] Keychain unavailable — using machine-derived fallback key');
-    return scryptSync(configDir(), 'ccp-fallback-salt-v2', 32);
+    throw new KeychainUnavailableError(
+      'macOS Keychain is required to store API secrets. Grant Keychain access or run on macOS.',
+    );
   }
-}
-
-function legacyDeobfuscate(encoded: string): string {
-  const buf = Buffer.from(encoded, 'base64');
-  for (let i = 0; i < buf.length; i++) {
-    buf[i] ^= LEGACY_OBFUSCATION_KEY.charCodeAt(i % LEGACY_OBFUSCATION_KEY.length);
-  }
-  return buf.toString('utf-8');
 }
 
 function encrypt(plaintext: string, masterKey: Buffer): EncryptedEntry {
@@ -108,24 +109,23 @@ function decrypt(entry: EncryptedEntry, masterKey: Buffer): string {
   ]).toString('utf-8');
 }
 
-function decodeEntry(value: string | EncryptedEntry, masterKey: Buffer): string {
-  if (typeof value === 'string') {
-    return legacyDeobfuscate(value);
-  }
-  if (value.v === 2) {
-    return decrypt(value, masterKey);
-  }
-  throw new Error('Unknown secret format');
-}
-
 function loadSecretsRaw(): StoredSecrets {
   ensureDataDir();
   const file = secretsFile();
   try {
     if (existsSync(file)) {
-      return JSON.parse(readFileSync(file, 'utf-8')) as StoredSecrets;
+      const parsed = JSON.parse(readFileSync(file, 'utf-8')) as Record<string, unknown>;
+      for (const value of Object.values(parsed)) {
+        if (typeof value === 'string') {
+          throw new KeychainUnavailableError(
+            'Legacy XOR-encoded secrets detected. Re-enter API keys via the admin dashboard.',
+          );
+        }
+      }
+      return parsed as StoredSecrets;
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof KeychainUnavailableError) throw err;
     console.error('[SecretStore] Failed to load secrets, starting fresh');
   }
   return {};
@@ -135,18 +135,12 @@ function loadSecrets(): Record<string, string> {
   const raw = loadSecretsRaw();
   const masterKey = getMasterKey();
   const result: Record<string, string> = {};
-  let needsMigration = false;
 
   for (const [name, value] of Object.entries(raw)) {
-    result[name] = decodeEntry(value, masterKey);
-    if (typeof value === 'string') {
-      needsMigration = true;
+    if (value.v !== 2) {
+      throw new KeychainUnavailableError(`Unsupported secret format for provider "${name}"`);
     }
-  }
-
-  if (needsMigration && Object.keys(result).length > 0) {
-    saveSecrets(result);
-    console.log('[SecretStore] Migrated secrets from legacy XOR to AES-256-GCM');
+    result[name] = decrypt(value, masterKey);
   }
 
   return result;
@@ -192,3 +186,5 @@ export async function deleteKey(providerName: string): Promise<void> {
   delete secrets[providerName];
   saveSecrets(secrets);
 }
+
+export { KeychainUnavailableError };

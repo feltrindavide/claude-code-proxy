@@ -34,10 +34,56 @@ import { resolveRequest } from './services/route-resolver.js';
 import { upstreamFetch } from './services/upstream-http.js';
 import { joinProviderUrl } from './services/provider-url.js';
 import { registerActiveStream } from './services/shutdown.js';
-import { rateLimiterService } from './services/rateLimiter.js';
 import { proxyCacheHitsTotal, proxyExperimentRequestsTotal } from './metrics/prometheus.js';
 import { createRequestLogger, logger } from './lib/logger.js';
 import { eventBus } from './services/event-bus.js';
+
+class StreamFailoverError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StreamFailoverError';
+  }
+}
+
+/** Apply max_tokens boost/clamp before upstream fetch (must run before JSON.stringify). */
+export function applyProviderBodyAdjustments(
+  providerBody: Record<string, unknown>,
+  resolution: RouteResolution,
+  reqLog: ReturnType<typeof createRequestLogger>,
+): void {
+  const highReasoningModels = ['deepseek', 'deepseek-r1', 'deepseek-v4'];
+  const needsBoost = highReasoningModels.some((m) =>
+    resolution.targetModel.toLowerCase().includes(m),
+  );
+  const originalMaxTokens = providerBody.max_tokens as number | undefined;
+  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens <= 200) {
+    const boosted = 4096;
+    providerBody.max_tokens = boosted;
+    providerBody.messages = [
+      {
+        role: 'system',
+        content: 'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.',
+      },
+      ...((providerBody.messages as unknown[]) || []),
+    ];
+    reqLog.info(
+      { from: originalMaxTokens, to: boosted, model: resolution.targetModel },
+      'Boosted max_tokens for reasoning overhead',
+    );
+  }
+
+  const modelInfo = contextRegistry.getModelContext(resolution.targetModel, resolution.provider.name);
+  if (modelInfo && providerBody.max_tokens !== undefined) {
+    const current = providerBody.max_tokens as number;
+    if (current > modelInfo.max_output) {
+      providerBody.max_tokens = modelInfo.max_output;
+      reqLog.info(
+        { from: current, to: modelInfo.max_output },
+        'Clamped max_tokens to model max_output',
+      );
+    }
+  }
+}
 
 /**
  * Emit an error response in the appropriate format (SSE or JSON)
@@ -179,8 +225,12 @@ export async function handleProxyRequest(
   const body = req.body || {};
 
   // 1a. Fast-path: short-circuit for trivially-answerable requests
-  // Must run before subagent tag extraction (fast-path handles simple requests)
   if (tryFastPath(body, res)) {
+    (req as any)._logContext = {
+      claudeTier: '',
+      providerName: 'fast-path',
+      targetModel: String(body.model ?? ''),
+    };
     return;
   }
 
@@ -280,41 +330,39 @@ export async function handleProxyRequest(
     const providerType = resolution.provider.providerType || resolution.provider.name;
     adapter = getOrCreateAdapter(providerType, resolution.provider.baseUrl);
     providerBody = adapter.transformRequest(body, resolution);
+    applyProviderBodyAdjustments(providerBody, resolution, reqLog);
     const resolvedApiKey = apiKey;
 
     try {
-      upstreamResponse = await rateLimiterService.schedule(
+      upstreamResponse = await fetchWithRetry(
         resolution.provider.name,
-        () => fetchWithRetry(
-          resolution!.provider.name,
-          async (attemptNumber) => {
-            retryAttempt = attemptNumber;
-            const controller = new AbortController();
-            const timeoutMs = wantsStream
-              ? adapter!.timeouts.streaming
-              : adapter!.timeouts.nonStreaming;
-            const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        async (attemptNumber) => {
+          retryAttempt = attemptNumber;
+          const controller = new AbortController();
+          const timeoutMs = wantsStream
+            ? adapter!.timeouts.streaming
+            : adapter!.timeouts.nonStreaming;
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-            try {
-              return await upstreamFetch(
-                joinProviderUrl(resolution!.provider.baseUrl, adapter!.apiPath),
-                {
-                  method: 'POST',
-                  headers: adapter!.buildHeaders(resolvedApiKey, {
-                    streaming: wantsStream,
-                    requestId: req.requestId,
-                  }),
-                  body: JSON.stringify(providerBody),
-                  signal: controller.signal,
-                },
-              );
-            } finally {
-              clearTimeout(timeout);
-            }
-          },
-        ),
+          try {
+            return await upstreamFetch(
+              joinProviderUrl(resolution!.provider.baseUrl, adapter!.apiPath),
+              {
+                method: 'POST',
+                headers: adapter!.buildHeaders(resolvedApiKey, {
+                  streaming: wantsStream,
+                  requestId: req.requestId,
+                }),
+                body: JSON.stringify(providerBody),
+                signal: controller.signal,
+              },
+            );
+          } finally {
+            clearTimeout(timeout);
+          }
+        },
+        { requestId: req.requestId },
       );
-      break;
     } catch (error) {
       lastUpstreamError = error;
       eventBus.emit('provider.error', {
@@ -327,12 +375,12 @@ export async function handleProxyRequest(
         (req as any)._upstreamLatencyMs = Date.now() - upstreamStart;
         return handleUpstreamFailure(res, body, error, req.requestId, req);
       }
+      continue;
     }
-  }
 
-  if (!resolution || !upstreamResponse || !adapter) {
-    return emitAnthropicError(res, 'No upstream route available', wantsStream, req.requestId, req);
-  }
+    if (!resolution || !upstreamResponse || !adapter) {
+      continue;
+    }
 
   // Enrich request log with route resolution data (per D-45, 04-01)
   (req as any)._logContext = {
@@ -373,65 +421,20 @@ export async function handleProxyRequest(
   // 5b. Calcola token di input REALI per passarli a Claude Code
   const realInputTokens = countRequestTokens(body.messages, body.system, body.tools);
 
-  // Debug: check reasoning_content for DeepSeek
-  if (resolution.targetModel?.toLowerCase().includes('deepseek') && Array.isArray(providerBody.messages)) {
-    const hasRC = (providerBody.messages as any[]).filter((m: any) => m.role === 'assistant' && !m.reasoning_content).length;
-    if (hasRC > 0) {
-      reqLog.warn({ count: hasRC }, 'Assistant messages missing reasoning_content for DeepSeek');
-    }
-  }
-
-  // Boost max_tokens for models with high reasoning overhead (e.g. DeepSeek)
-  // These models spend tokens on chain-of-thought before producing a response.
-  // The auto-mode classifier uses small max_tokens (1-50) which gets consumed
-  // entirely by reasoning, leaving no tokens for the actual response.
-  const highReasoningModels = ['deepseek', 'deepseek-r1', 'deepseek-v4'];
-  const needsBoost = highReasoningModels.some(m =>
-    resolution.targetModel.toLowerCase().includes(m)
-  );
-  const originalMaxTokens = (providerBody as any).max_tokens;
-  if (needsBoost && originalMaxTokens !== undefined && originalMaxTokens <= 200) {
-    // DeepSeek uses chain-of-thought that consumes ~150-500+ tokens.
-    // The auto-mode classifier sends 1-50 tokens which gets entirely consumed
-    // by reasoning, leaving 0 tokens for the actual response.
-    // Boost generously so DeepSeek has room for both reasoning AND actual content.
-    const boosted = 4096;
-    (providerBody as any).max_tokens = boosted;
-
-    // Add system instruction to suppress chain-of-thought reasoning
-    // DeepSeek defaults to verbose analysis even for simple requests
-    (providerBody as any).messages = [
-      { role: 'system', content: 'Answer directly and concisely. Do NOT analyze, think step by step, or explain. Just give the answer.' },
-      ...((providerBody as any).messages || [])
-    ];
-
-    reqLog.info(
-      { from: originalMaxTokens, to: boosted, model: resolution.targetModel },
-      'Boosted max_tokens for reasoning overhead',
-    );
-  }
-
-  // Clamp max_tokens to model's max_output if known (evita errori "max_tokens exceeds model limit")
-  const modelInfo = contextRegistry.getModelContext(resolution.targetModel, resolution.provider.name);
-  if (modelInfo && (providerBody as any).max_tokens !== undefined) {
-    const current = (providerBody as any).max_tokens as number;
-    if (current > modelInfo.max_output) {
-      (providerBody as any).max_tokens = modelInfo.max_output;
-      reqLog.info(
-        { from: current, to: modelInfo.max_output },
-        'Clamped max_tokens to model max_output',
-      );
-    }
-  }
+  // Snapshot config for this request (avoid mid-stream hot-reload drift)
+  const savedConfig = configService.load();
+  (req as any)._runtimeConfig = savedConfig;
 
   try {
     // 7b. Decide if thinking was requested by Claude Code (high-effort mode)
-    // This controls whether adapters emit native thinking_delta events or convert to text
     const thinkingEnabled = (body as any).thinking?.type === 'enabled';
 
-    // 7c. Resolve thinking mode for this request (load persisted config from disk)
-    const savedConfig = configService.load();
-    const thinkingMode = resolveThinkingMode(resolution.claudeTier, resolution.targetModel, savedConfig.thinking as any);
+    // 7c. Resolve thinking mode for this request
+    const thinkingMode = resolveThinkingMode(
+      resolution.claudeTier,
+      resolution.targetModel,
+      savedConfig.thinking as any,
+    );
     const thinkingTracker = new ThinkingBlockTracker();
     const autoDetector = thinkingMode === 'auto' ? new AutoModeDetector(10) : null;
 
@@ -453,7 +456,9 @@ export async function handleProxyRequest(
       let outputTokens = 0;
       let streamedText = '';
       let deadlineExceeded = false;
+      let streamBytesWritten = 0;
 
+      try {
       for await (const event of adapter.transformResponse(upstreamResponse, {
         messageId: `msg_${crypto.randomUUID()}`,
         model: body.model,
@@ -508,10 +513,15 @@ export async function handleProxyRequest(
           filteredEvent.includes('message_') || filteredEvent.includes('"error"');
         if (shouldFlushStreamBuffer({ isContentDelta, isBoundary, bufLength: buf.length })) {
           res.write(buf.join(''));
+          streamBytesWritten += buf.join('').length;
           buf.length = 0;
         }
       }
-      if (buf.length > 0) res.write(buf.join(''));
+      if (buf.length > 0) {
+        const chunk = buf.join('');
+        res.write(chunk);
+        streamBytesWritten += chunk.length;
+      }
       if (deadlineExceeded) {
         emitSSEEvent(res, 'message_delta', {
           type: 'message_delta',
@@ -526,6 +536,16 @@ export async function handleProxyRequest(
         outputTokens = estimateOutputTokens(streamedText);
       }
       updateLastUsage(realInputTokens.total, outputTokens, resolution, inflationFactor, currentSessionId);
+      } catch (streamError) {
+        if (streamBytesWritten === 0) {
+          throw new StreamFailoverError(
+            streamError instanceof Error ? streamError.message : String(streamError),
+          );
+        }
+        markUpstreamError(req);
+        emitSSEEvent(res, 'message_stop', { type: 'message_stop' });
+        if (!res.writableEnded) res.end();
+      }
     } else {
       // Non-streaming: accumulate events into a complete JSON response
       res.setHeader('Content-Type', 'application/json');
@@ -608,9 +628,21 @@ export async function handleProxyRequest(
       }
       updateLastUsage(realInputTokens.total, outTokens, resolution, inflationFactor, currentSessionId);
     }
-  } catch (error) {
-    return handleUpstreamFailure(res, body, error, req.requestId, req);
+    return;
+    } catch (error) {
+      if (error instanceof StreamFailoverError && candidateIdx < candidates.length - 1) {
+        lastUpstreamError = error;
+        reqLog.warn(
+          { attempt: candidateIdx + 1, reason: error.message },
+          'Mid-stream failover to next route candidate',
+        );
+        continue;
+      }
+      return handleUpstreamFailure(res, body, error, req.requestId, req);
+    }
   }
+
+  return emitAnthropicError(res, 'No upstream route available', wantsStream, req.requestId, req);
 }
 
 function emitSSEEvent(res: Response, eventType: string, data: Record<string, unknown>): void {

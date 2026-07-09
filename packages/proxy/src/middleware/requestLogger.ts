@@ -5,6 +5,7 @@
 import onFinished from 'on-finished';
 import type { Request, Response, NextFunction } from 'express';
 import { requestLogService } from '../services/requestLog.js';
+import { notifyRequestCompleted } from '../services/config-watcher.js';
 import { eventBus } from '../services/event-bus.js';
 import { latencyTracker } from '../services/latency-tracker.js';
 import {
@@ -28,6 +29,7 @@ export function requestLoggerMiddleware(
   const wantsStream = (req.body as { stream?: boolean })?.stream === true;
 
   onFinished(res, (err: Error | null) => {
+    notifyRequestCompleted();
     const durationMs = Date.now() - startTime;
     const hadUpstreamError = (req as { hadUpstreamError?: boolean }).hadUpstreamError === true;
     const status = err || hadUpstreamError || res.statusCode >= 400 ? 'error' : 'success';

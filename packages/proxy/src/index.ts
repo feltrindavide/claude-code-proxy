@@ -13,13 +13,15 @@ import { execSync } from 'child_process';
 import { handleProxyRequest } from './proxy.js';
 import { providerService } from './services/provider.js';
 import { contextRegistry } from './services/context-registry.js';
-import { configService } from './services/config.js';
+import { configService, configLoadError } from './services/config.js';
 import { providerValidatorService } from './services/provider-validator.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import { rateLimitMiddleware } from './middleware/rateLimitMiddleware.js';
 import { shutdownGateMiddleware } from './middleware/shutdownGate.js';
 import { lanProxyAuthMiddleware } from './middleware/lanProxyAuth.js';
+import { clientRateLimitMiddleware } from './middleware/clientRateLimit.js';
+import { activeRequestGateMiddleware } from './middleware/activeRequestGate.js';
 import { routeResolverMiddleware } from './middleware/routeResolverMiddleware.js';
 import { requestLogService } from './services/requestLog.js';
 import { validationStoreService } from './services/validationStore.js';
@@ -39,7 +41,7 @@ import { rateLimiterService } from './services/rateLimiter.js';
 import { startConfigWatcher, stopConfigWatcher } from './services/config-watcher.js';
 import { closeContextStreams } from './services/context-broadcast.js';
 import { setupDesktopEnv } from './services/desktop-env.js';
-import { resolveBindHost, resolvePort, DEFAULT_HOST, DEFAULT_PORT } from './services/network.js';
+import { resolveBindHost, resolvePort, DEFAULT_HOST, DEFAULT_PORT, isLocalhostHost } from './services/network.js';
 import {
   startAdminMtlsServer,
   closeAdminMtlsServer,
@@ -101,15 +103,17 @@ export function createApp(options?: { mountAdmin?: boolean }): express.Applicati
 
   application.get('/health', (_req, res) => {
     const cfg = configService.load();
-    res.json({
-      status: isShuttingDown() ? 'draining' : 'ok',
+    const hasConfigError = Boolean(configLoadError);
+    res.status(hasConfigError ? 503 : 200).json({
+      status: isShuttingDown() ? 'draining' : hasConfigError ? 'degraded' : 'ok',
       host: resolveBindHost(cfg.host),
       port: resolvePort(cfg.port),
       version: APP_VERSION,
       adminMtls: getAdminMtlsStatus(),
       uptimeMs: Date.now() - SERVER_START_TIME,
       activeStreams: getActiveStreamCount(),
-      configVersion: cfg.port ?? DEFAULT_PORT,
+      configVersion: configService.getConfigMtime(),
+      configError: configLoadError,
     });
   });
 
@@ -154,7 +158,9 @@ export function createApp(options?: { mountAdmin?: boolean }): express.Applicati
 
   application.post(
     '/v1/messages',
+    activeRequestGateMiddleware,
     lanProxyAuthMiddleware,
+    clientRateLimitMiddleware,
     shutdownGateMiddleware,
     routeResolverMiddleware,
     requestLoggerMiddleware,
@@ -162,7 +168,27 @@ export function createApp(options?: { mountAdmin?: boolean }): express.Applicati
     handleProxyRequest,
   );
 
+  attachStaticFrontend(application);
+
   return application;
+}
+
+/** Serve bundled Next.js static export when present (production). */
+export function attachStaticFrontend(application: express.Application): void {
+  const webDir = path.join(__dirname, '../web');
+  if (!fs.existsSync(webDir)) return;
+
+  console.log(`[Proxy] Serving frontend from ${webDir}`);
+  application.use(express.static(webDir));
+  application.use((req, res, next) => {
+    if (req.method !== 'GET') return next();
+    const filePath = path.join(webDir, req.path === '/' ? 'index.html' : `${req.path}/index.html`);
+    if (fs.existsSync(filePath)) {
+      res.sendFile(filePath);
+    } else {
+      next();
+    }
+  });
 }
 
 export let app = createApp();
@@ -471,26 +497,6 @@ async function loadConfigOnStartup(): Promise<void> {
   setDiscoveryService(discovery);
 }
 
-// Serve frontend static files if bundled together (production build)
-// Placed after all API routes so API takes priority
-const webDir = path.join(__dirname, '../web');
-if (fs.existsSync(webDir)) {
-  console.log(`[Proxy] Serving frontend from ${webDir}`);
-  // Serve static files (only if file exists, otherwise falls through)
-  app.use(express.static(webDir));
-  // Handle Next.js static export paths: /settings -> /settings/index.html
-  // Only matches GET requests not already handled by API routes above
-  app.use((req, res, next) => {
-    if (req.method !== 'GET') return next();
-    const filePath = path.join(webDir, req.path === '/' ? 'index.html' : `${req.path}/index.html`);
-    if (fs.existsSync(filePath)) {
-      res.sendFile(filePath);
-    } else {
-      next();
-    }
-  });
-}
-
 // Update check endpoint (proxied to avoid CORS issues from Tauri webview)
 app.get('/update-check', async (_req, res) => {
   try {
@@ -543,6 +549,15 @@ function ensureCert(): { key: string; cert: string } | null {
  */
 let httpsServer: ReturnType<typeof import('https').createServer> | null = null;
 
+function assertLanBindSecurity(bindHost: string): void {
+  if (isLocalhostHost(bindHost)) return;
+  if (!process.env.PROXY_API_TOKEN) {
+    throw new Error(
+      'LAN bind requires PROXY_API_TOKEN. Set PROXY_API_TOKEN or bind to 127.0.0.1 only.',
+    );
+  }
+}
+
 function startHttpsServer(app: express.Application, httpsPort: number): void {
   const certs = ensureCert();
   if (!certs) {
@@ -555,6 +570,15 @@ function startHttpsServer(app: express.Application, httpsPort: number): void {
     const tlsOptions = {
       key: fs.readFileSync(certs.key),
       cert: fs.readFileSync(certs.cert),
+      minVersion: 'TLSv1.2' as const,
+      ciphers: [
+        'TLS_AES_256_GCM_SHA384',
+        'TLS_CHACHA20_POLY1305_SHA256',
+        'TLS_AES_128_GCM_SHA256',
+        'ECDHE-RSA-AES128-GCM-SHA256',
+        'ECDHE-RSA-AES256-GCM-SHA384',
+      ].join(':'),
+      honorCipherOrder: true,
     };
 
     httpsServer = https.createServer(tlsOptions, app);
@@ -652,7 +676,14 @@ let adminMtlsApp: express.Application | null = null;
 /** Minimal app exposing only /admin for mTLS listener */
 function createAdminMtlsApp(): express.Application {
   const adminApp = express();
-  adminApp.use(cors());
+  adminApp.use(cors({
+    origin: [
+      'http://localhost:3457',
+      'http://127.0.0.1:3457',
+      'tauri://localhost',
+      'http://tauri.localhost',
+    ],
+  }));
   adminApp.use(express.json({ limit: '32mb' }));
   adminApp.use('/admin', adminRouter);
   adminApp.get('/health', (_req, res) => {
@@ -674,6 +705,7 @@ export async function startServer(port: number = DEFAULT_PORT, host?: string): P
   const config = configService.load();
   const bindHost = resolveBindHost(host ?? config.host ?? DEFAULT_HOST);
   const bindPort = resolvePort(port ?? config.port);
+  assertLanBindSecurity(bindHost);
   const adminSeparated = config.adminPortSeparation === true;
   const adminHttpPort = config.adminHttpPort ?? 3458;
 
@@ -686,8 +718,8 @@ export async function startServer(port: number = DEFAULT_PORT, host?: string): P
 
   if (adminSeparated) {
     const adminOnlyApp = createAdminOnlyApp();
-    startAdminHttpServer(adminOnlyApp, adminHttpPort, bindHost);
-    logger.info(`Admin API (separated): http://${bindHost}:${adminHttpPort}/admin`);
+    startAdminHttpServer(adminOnlyApp, adminHttpPort, '127.0.0.1');
+    logger.info(`Admin API (separated): http://127.0.0.1:${adminHttpPort}/admin`);
   }
 
   return new Promise((resolve, reject) => {

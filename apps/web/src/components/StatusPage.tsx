@@ -17,9 +17,9 @@ import { ContextGauge } from '@/components/ContextGauge';
 export function StatusPage() {
   const {
     status, port, version, startTime, providerCount,
-    lastError, checkHealth, uptimeMs, activeStreams, baseUrl,
+    lastError, uptimeMs, activeStreams, baseUrl,
   } = useProxyStore();
-  const { pollValidation, validationResults } = useHealthStore();
+  const { validationResults } = useHealthStore();
   const { toast } = useToast();
   const logEntries = useLogStore((s) => s.entries);
   useLogStream();
@@ -27,11 +27,6 @@ export function StatusPage() {
   const [copied, setCopied] = useState(false);
 
   const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
-
-  // Initial health check on mount
-  useEffect(() => {
-    checkHealth();
-  }, [checkHealth]);
 
   useEffect(() => {
     const loadMetrics = () => {
@@ -43,21 +38,6 @@ export function StatusPage() {
     const interval = setInterval(loadMetrics, 10000);
     return () => clearInterval(interval);
   }, [status]);
-
-  // Poll every 5 seconds (per D-38)
-  useEffect(() => {
-    const interval = setInterval(() => {
-      checkHealth();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [checkHealth]);
-
-  // Poll validation results for provider health (5s interval)
-  useEffect(() => {
-    pollValidation();
-    const interval = setInterval(pollValidation, 5000);
-    return () => clearInterval(interval);
-  }, [pollValidation]);
 
   // Retry toast detection (D-69)
   const [lastAckedRetryKey, setLastAckedRetryKey] = useState<string | null>(null);

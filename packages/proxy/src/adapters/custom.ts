@@ -30,6 +30,7 @@ import {
   parseSSEStream,
   mapStopReason,
   getUserFacingErrorMessage,
+  formatSSEEvent,
 } from '../services/sse-transformer.js';
 import { buildProviderHeaders, type HeaderOptions } from './base-headers.js';
 import { upstreamFetch } from '../services/upstream-http.js';
@@ -61,7 +62,7 @@ export class CustomAdapter implements ProviderAdapter {
       return {
         ...body,
         model: route.targetModel,
-        stream: true,
+        stream: body.stream === true,
       };
     }
 
@@ -164,19 +165,15 @@ export class CustomAdapter implements ProviderAdapter {
           }
         }
 
-        // If no tool results, flush deferred text BEFORE user message
-        if (deferredText !== null && toolResults.length === 0) {
-          messages.push({ role: 'assistant', content: deferredText });
-          deferredText = null;
+        // OpenAI constraint: tool messages must IMMEDIATELY follow the assistant's tool_calls.
+        for (const tr of toolResults) {
+          messages.push(tr);
         }
 
         if (textContent) {
           messages.push({ role: 'user', content: textContent });
         }
-        for (const tr of toolResults) {
-          messages.push(tr);
-        }
-        // Flush deferred text AFTER tool results (keeps tool results adjacent to tool_calls)
+
         if (deferredText !== null) {
           messages.push({ role: 'assistant', content: deferredText });
           deferredText = null;
@@ -191,7 +188,11 @@ export class CustomAdapter implements ProviderAdapter {
       deferredText = null;
     }
 
-    const result: Record<string, unknown> = { model: route.targetModel, messages, stream: true };
+    const result: Record<string, unknown> = {
+      model: route.targetModel,
+      messages,
+      stream: body.stream === true,
+    };
 
     if (body.system) {
       const systemText = typeof body.system === 'string'
@@ -328,7 +329,7 @@ export class CustomAdapter implements ProviderAdapter {
               }
               // New tool call — emit content_block_start for tool_use
               const toolIndex = sse.startToolBlock(tc.index);
-              yield this.formatSSEEvent('content_block_start', {
+              yield formatSSEEvent('content_block_start', {
                 type: 'content_block_start',
                 index: toolIndex,
                 content_block: {
@@ -342,7 +343,7 @@ export class CustomAdapter implements ProviderAdapter {
             // Emit input_json_delta for arguments fragment
             if (tc.function?.arguments) {
               const toolIndex = tc.index ?? 0;
-              yield this.formatSSEEvent('content_block_delta', {
+              yield formatSSEEvent('content_block_delta', {
                 type: 'content_block_delta',
                 index: toolIndex,
                 delta: {
@@ -432,16 +433,9 @@ export class CustomAdapter implements ProviderAdapter {
   }
 
   private emitError(message: string): string {
-    return this.formatSSEEvent('error', {
+    return formatSSEEvent('error', {
       type: 'error',
       error: { type: 'api_error', message },
     });
-  }
-
-  private formatSSEEvent(
-    eventType: string,
-    data: Record<string, unknown>,
-  ): string {
-    return `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
   }
 }

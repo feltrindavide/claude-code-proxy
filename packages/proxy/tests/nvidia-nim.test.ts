@@ -42,6 +42,32 @@ describe('NvidiaNimAdapter', () => {
 
     expect(body.max_tokens).toBe(8192);
     expect(body.model).toBe('meta/llama-3.1-8b-instruct');
+    expect(body.stream).toBe(false);
+  });
+
+  it('passes through stream flag when requested', () => {
+    const adapter = new NvidiaNimAdapter();
+    const body = adapter.transformRequest(
+      {
+        model: 'claude-sonnet-4-20250514',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+      },
+      {
+        provider: {
+          name: 'nvidia-nim',
+          baseUrl: 'https://integrate.api.nvidia.com',
+          keyId: 'nvidia-nim',
+          models: [],
+          enabled: true,
+          priority: 1,
+          providerType: 'nvidia-nim',
+        },
+        targetModel: 'meta/llama-3.1-8b-instruct',
+        originalModel: 'claude-sonnet-4-20250514',
+      },
+    );
+
     expect(body.stream).toBe(true);
   });
 

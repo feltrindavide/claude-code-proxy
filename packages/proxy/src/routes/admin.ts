@@ -14,7 +14,7 @@
  */
 
 import { Router, json as expressJson } from 'express';
-import { configService, providerNameSchema, urlSchema, modelNameSchema } from '../services/config.js';
+import { configService, providerNameSchema, urlSchema, modelNameSchema, proxyConfigSchema } from '../services/config.js';
 import { setKey, getKey, hasKey, deleteKey } from '../services/keychain.js';
 import { providerService } from '../services/provider.js';
 import { providerValidatorService } from '../services/provider-validator.js';
@@ -57,6 +57,22 @@ import { z } from 'zod';
 
 const router = Router();
 
+const bootstrapAttempts = new Map<string, { count: number; resetAt: number }>();
+const BOOTSTRAP_WINDOW_MS = 60_000;
+const BOOTSTRAP_MAX = 10;
+
+function checkBootstrapRateLimit(req: import('express').Request): boolean {
+  const key = req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = bootstrapAttempts.get(key);
+  if (!entry || now >= entry.resetAt) {
+    bootstrapAttempts.set(key, { count: 1, resetAt: now + BOOTSTRAP_WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= BOOTSTRAP_MAX;
+}
+
 /**
  * GET /admin/auth/bootstrap
  * Returns admin token for localhost clients only (dashboard, hooks).
@@ -65,6 +81,12 @@ router.get('/auth/bootstrap', (req, res) => {
   if (!isLocalhostRequest(req)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
+  if (!checkBootstrapRateLimit(req)) {
+    return res.status(429).json({ error: 'Too many bootstrap requests' });
+  }
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  logger.info({ remote: req.socket.remoteAddress }, 'Admin bootstrap token issued');
   res.json({ token: ensureAdminToken() });
 });
 
@@ -126,16 +148,16 @@ router.get('/config', (req, res) => {
  */
 router.put('/config', (req, res) => {
   try {
-    const config = req.body;
-    
-    // Validate config
-    const result = configService.validateProvider(config.providers?.[0]);
-    if (!result?.valid) {
-      // Allow empty providers
+    const parsed = proxyConfigSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const details = parsed.error.errors
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
+        .join('; ');
+      return res.status(400).json({ error: `Invalid config: ${details}` });
     }
-    
-    configService.save(config);
-    providerService.reload(config.providers || [], config.routes || []);
+
+    configService.save(parsed.data);
+    providerService.reload(parsed.data.providers || [], parsed.data.routes || []);
 
     // Sync context registry with updated models
     contextRegistry.syncFromConfig(providerService.getProviders());
@@ -332,6 +354,43 @@ router.delete('/providers/:id', async (req, res) => {
   } catch (error) {
     console.error('[Admin] Error deleting provider:', error);
     res.status(500).json({ error: 'Failed to delete provider' });
+  }
+});
+
+/**
+ * POST /admin/providers/validate-dry
+ * Test provider credentials without saving config (no keychain/config side effects).
+ * Must be registered before /providers/:id/validate to avoid route shadowing.
+ */
+router.post('/providers/validate-dry', async (req, res) => {
+  try {
+    const { name, baseUrl, apiKey, providerType } = req.body as {
+      name?: string;
+      baseUrl?: string;
+      apiKey?: string;
+      providerType?: string;
+    };
+
+    if (!name?.trim() || !baseUrl?.trim()) {
+      return res.status(400).json({ error: 'name and baseUrl are required' });
+    }
+
+    try {
+      new URL(baseUrl);
+    } catch {
+      return res.status(400).json({ error: 'baseUrl must be a valid URL' });
+    }
+
+    const result = await providerValidatorService.validateProviderInline(
+      providerType || 'Custom',
+      baseUrl,
+      apiKey,
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('[Admin] Error in dry-run validation:', error);
+    res.status(500).json({ error: 'Failed to validate provider' });
   }
 });
 
@@ -1193,6 +1252,9 @@ router.get('/circuit-breakers', (_req, res) => {
 
 router.post('/replay', async (req, res) => {
   try {
+    if (!requestLogService.isReplayEnabled()) {
+      return res.status(403).json({ error: 'Request replay is disabled. Set replayBodies: true in config.' });
+    }
     const replayId = req.body?.replayId as string | undefined;
     const body = req.body?.body as unknown | undefined;
     let requestBody: unknown;

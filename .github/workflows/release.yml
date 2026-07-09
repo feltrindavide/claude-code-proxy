@@ -26,6 +26,15 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
+      - name: Run tests
+        run: |
+          npm run test:run -w packages/proxy
+          npm run typecheck -w packages/proxy
+          npm run typecheck -w apps/web
+          npm run typecheck -w packages/cli
+          npm run lint -w apps/web
+          npm run test:run -w apps/web
+
       - name: Build Tauri app
         run: npm run tauri build
         env:

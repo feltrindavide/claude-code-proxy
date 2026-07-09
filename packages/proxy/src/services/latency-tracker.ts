@@ -84,6 +84,27 @@ class LatencyTrackerService {
     return out.sort((a, b) => a.provider.localeCompare(b.provider));
   }
 
+  /** Aggregate all samples for global percentile metrics (not average of per-model p50s). */
+  getGlobalLatency(): { p50: number; p95: number; avg: number } {
+    const allSamples: number[] = [];
+    for (const ring of this.rings.values()) {
+      const count = ring.count;
+      for (let i = 0; i < count; i++) {
+        allSamples.push(ring.values[i]);
+      }
+    }
+    if (allSamples.length === 0) {
+      return { p50: 0, p95: 0, avg: 0 };
+    }
+    allSamples.sort((a, b) => a - b);
+    const sum = allSamples.reduce((a, b) => a + b, 0);
+    return {
+      p50: percentile(allSamples, 50),
+      p95: percentile(allSamples, 95),
+      avg: Math.round(sum / allSamples.length),
+    };
+  }
+
   /** Lower score = faster (uses p50, falls back to avg or high default). */
   latencyScore(provider: string, model: string): number {
     const stats = this.getStats(provider, model);

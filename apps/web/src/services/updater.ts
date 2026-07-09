@@ -47,7 +47,7 @@ export async function checkForUpdates(): Promise<{ available: boolean; version?:
 }
 
 export function openDownloadPage(): void {
-  const tauri = (window as any).__TAURI__;
+  const tauri = (window as Window & { __TAURI__?: { shell?: { open: (url: string) => void } } }).__TAURI__;
   if (tauri?.shell?.open) {
     tauri.shell.open(RELEASES_URL);
   } else {

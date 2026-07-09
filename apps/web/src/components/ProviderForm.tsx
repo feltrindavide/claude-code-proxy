@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { saveProvider, testProviderConnection } from '@/lib/api';
+import { saveProvider, testProviderConnection, testProviderDry } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -9,7 +9,14 @@ import { Eye, EyeOff, Check, X } from 'lucide-react';
 
 interface ProviderFormProps {
   provider?: { name: string; baseUrl: string; enabled: boolean; priority: number; providerType?: string } | null;
-  onSave: (data: any) => void;
+  onSave: (data: {
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    providerType: string;
+    enabled: boolean;
+    priority: number;
+  }) => void;
   onClose: () => void;
 }
 
@@ -117,21 +124,28 @@ export function ProviderForm({ provider, onSave, onClose }: ProviderFormProps) {
     setTesting(true);
     setTestResult(null);
     try {
-      // For new providers, save first then test
-      if (!provider) {
-        const internalType = getInternalProviderType(providerType);
-        await saveProvider({ name, baseUrl, apiKey, providerType: internalType, enabled, priority });
-      }
-      const result = await testProviderConnection(name);
+      const internalType = getInternalProviderType(providerType);
+      const submitApiKey = apiKey === '••••••••' ? undefined : apiKey;
+
+      const result = provider
+        ? await testProviderConnection(name)
+        : await testProviderDry({
+            name: name.trim(),
+            baseUrl: baseUrl.trim(),
+            apiKey: submitApiKey,
+            providerType: internalType,
+          });
+
       setTestResult(result);
       if (result.valid) {
         toast('Connection successful', 'success');
       } else {
-        toast(`Unable to connect to ${name}. Check the base URL and API key, then try again.`, 'error');
+        toast(result.error || `Unable to connect to ${name}. Check the base URL and API key.`, 'error');
       }
     } catch (error) {
-      setTestResult({ valid: false, error: 'Test failed' });
-      toast(`Unable to connect to ${name}. Check the base URL and API key, then try again.`, 'error');
+      const message = error instanceof Error ? error.message : 'Test failed';
+      setTestResult({ valid: false, error: message });
+      toast(message, 'error');
     } finally {
       setTesting(false);
     }

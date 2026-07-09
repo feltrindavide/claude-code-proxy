@@ -3,6 +3,7 @@
  */
 
 import { upstreamFetch } from './upstream-http.js';
+import { joinProviderUrl } from './provider-url.js';
 import { circuitBreakerService, type CircuitState } from './circuit-breaker.js';
 import { getKey } from './keychain.js';
 import type { LLMProvider } from '../types/index.js';
@@ -61,7 +62,7 @@ export async function checkProviderHealth(provider: LLMProvider): Promise<Provid
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
-    const response = await upstreamFetch(`${provider.baseUrl}/v1/models`, {
+    const response = await upstreamFetch(joinProviderUrl(provider.baseUrl, '/v1/models'), {
       method: 'GET',
       headers,
       signal: controller.signal,

@@ -7,9 +7,9 @@
  * Per D-13: Config stores keyId (Keychain account name), never the actual key
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, copyFileSync } from 'fs';
 import { recordConfigAudit } from './config-audit.js';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import os from 'os';
 import { z } from 'zod';
 import type { LLMProvider, ModelRoute, ClaudeTier } from '../types/index.js';
@@ -119,6 +119,7 @@ export const proxyConfigSchema = z.object({
   }).optional(),
   adminPortSeparation: z.boolean().optional(),
   adminHttpPort: z.number().int().min(1024).max(65535).optional(),
+  replayBodies: z.boolean().optional(),
   activeProfile: z.string().optional(),
   profiles: z.record(z.unknown()).optional(),
 });
@@ -126,6 +127,14 @@ export const proxyConfigSchema = z.object({
 export type AppConfig = z.infer<typeof proxyConfigSchema>;
 
 export { providerNameSchema, urlSchema, modelNameSchema, llmProviderSchema, modelRouteSchema };
+
+/** Set when config.json exists but fails validation — surfaced on /health. */
+export let configLoadError: string | null = null;
+
+/** @internal test helper */
+export function _resetConfigLoadErrorForTests(): void {
+  configLoadError = null;
+}
 
 /**
  * ConfigService — manages proxy configuration persistence
@@ -150,6 +159,17 @@ export class ConfigService {
     this.cacheMtime = 0;
   }
 
+  /** Config file mtime for /health configVersion (not the listen port). */
+  getConfigMtime(): number {
+    if (this.cacheMtime > 0) return this.cacheMtime;
+    try {
+      if (existsSync(this.configPath)) {
+        return statSync(this.configPath).mtimeMs;
+      }
+    } catch {}
+    return 0;
+  }
+
   /**
    * Load configuration from disk
    * Returns defaults if file doesn't exist (graceful first-run)
@@ -157,29 +177,64 @@ export class ConfigService {
   load(): AppConfig {
     try {
       if (!existsSync(this.configPath)) {
+        configLoadError = null;
         return this.getDefaults();
       }
 
       const mtime = statSync(this.configPath).mtimeMs;
-      if (this.cachedConfig && mtime === this.cacheMtime) {
+      if (this.cachedConfig && mtime === this.cacheMtime && !configLoadError) {
         return this.cachedConfig;
       }
 
       const content = readFileSync(this.configPath, 'utf-8');
-      const parsed = JSON.parse(content);
-      
-      const result = proxyConfigSchema.safeParse(parsed);
-      if (!result.success) {
-        console.error('[Config] Invalid config, using defaults:', result.error);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content);
+      } catch (parseErr) {
+        const msg = parseErr instanceof Error ? parseErr.message : 'JSON parse error';
+        configLoadError = `Invalid JSON in config.json: ${msg}`;
+        this.backupInvalidConfig(content);
+        console.error('[Config]', configLoadError);
         return this.getDefaults();
       }
-      
+
+      const result = proxyConfigSchema.safeParse(parsed);
+      if (!result.success) {
+        const details = result.error.errors
+          .map((e) => `${e.path.join('.')}: ${e.message}`)
+          .join('; ');
+        configLoadError = `Config validation failed: ${details}`;
+        this.backupInvalidConfig(content);
+        console.error('[Config]', configLoadError);
+        return this.getDefaults();
+      }
+
+      configLoadError = null;
       this.cachedConfig = result.data;
       this.cacheMtime = mtime;
       return result.data;
     } catch (error) {
+      configLoadError = error instanceof Error ? error.message : 'Unknown config load error';
       console.error('[Config] Error loading config:', error);
       return this.getDefaults();
+    }
+  }
+
+  private backupInvalidConfig(rawContent: string): void {
+    try {
+      const backupDir = join(this.configDir, 'config-backup');
+      if (!existsSync(backupDir)) {
+        mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+      }
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = join(backupDir, `config-invalid-${timestamp}.json`);
+      writeFileSync(backupPath, rawContent, { mode: 0o600 });
+      if (existsSync(this.configPath)) {
+        copyFileSync(this.configPath, join(backupDir, `config-invalid-${timestamp}-original.json`));
+      }
+      console.error(`[Config] Invalid config backed up to ${backupPath}`);
+    } catch (backupErr) {
+      console.error('[Config] Failed to backup invalid config:', backupErr);
     }
   }
 
@@ -188,13 +243,19 @@ export class ConfigService {
    * Uses atomic write pattern: temp file + rename
    */
   save(config: AppConfig): void {
-    // Validate before saving
     const result = proxyConfigSchema.safeParse(config);
     if (!result.success) {
-      throw new Error(`Invalid config: ${result.error}`);
+      const details = result.error.errors
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
+        .join('; ');
+      throw new Error(`Invalid config: ${details}`);
     }
 
     // Ensure directory exists
+    const configDir = dirname(this.configPath);
+    if (!existsSync(configDir)) {
+      mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    }
     if (!existsSync(this.configDir)) {
       mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     }

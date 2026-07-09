@@ -44,7 +44,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
     return {
       ...body,
       model: route.targetModel, // Use mapped model, not the original
-      stream: true,
+      stream: body.stream === true,
     };
   }
 

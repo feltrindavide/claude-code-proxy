@@ -42,7 +42,7 @@ export class OllamaAdapter implements ProviderAdapter {
     return {
       ...body,
       model: route.targetModel,
-      stream: true,
+      stream: body.stream === true,
     };
   }
 

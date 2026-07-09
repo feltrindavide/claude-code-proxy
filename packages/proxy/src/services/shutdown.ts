@@ -7,6 +7,25 @@ import type { Response } from 'express';
 import { closeUpstreamAgents } from './upstream-http.js';
 import { logger } from '../lib/logger.js';
 
+function emitStreamTerminalEvents(res: Response): void {
+  try {
+    if (res.writableEnded) return;
+    res.write(
+      `event: message_delta\ndata: ${JSON.stringify({
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 0 },
+      })}\n\n`,
+    );
+    res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+    res.end();
+  } catch {
+    try {
+      if (!res.writableEnded) res.end();
+    } catch {}
+  }
+}
+
 const activeStreams = new Set<Response>();
 let shuttingDown = false;
 
@@ -53,7 +72,7 @@ export function setupGracefulShutdown(deps: ShutdownDeps): void {
       const deadline = setTimeout(() => {
         for (const res of activeStreams) {
           try {
-            if (!res.writableEnded) res.end();
+            if (!res.writableEnded) emitStreamTerminalEvents(res);
           } catch {}
         }
         activeStreams.clear();

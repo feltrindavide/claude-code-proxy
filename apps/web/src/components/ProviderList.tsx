@@ -29,17 +29,11 @@ export function ProviderList() {
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const { toast } = useToast();
-  const { isProviderHealthy, getProviderError, pollValidation } = useHealthStore();
+  const { isProviderHealthy, getProviderError } = useHealthStore();
 
   useEffect(() => {
-    loadProviders();
+    void loadProviders();
   }, []);
-
-  useEffect(() => {
-    pollValidation();
-    const interval = setInterval(pollValidation, 5000);
-    return () => clearInterval(interval);
-  }, [pollValidation]);
 
   async function loadProviders() {
     try {
@@ -63,7 +57,14 @@ export function ProviderList() {
     setDeleteConfirm(null);
   }
 
-  function handleSave(_data: any) {
+  function handleSave(_data: {
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    providerType: string;
+    enabled: boolean;
+    priority: number;
+  }) {
     setFormOpen(false);
     setEditingProvider(null);
     loadProviders();
@@ -183,16 +184,17 @@ export function ProviderList() {
         open={deleteConfirm !== null}
         onClose={() => setDeleteConfirm(null)}
       >
-        <p className="text-body mb-lg">
-          Remove {deleteConfirm}? This action cannot be undone. The API key will be removed from Keychain.
+        <p className="text-body mb-lg" id="delete-confirm-desc">
+          Remove <strong>{deleteConfirm}</strong>? This action cannot be undone. The API key will be removed from Keychain.
         </p>
         <div className="flex gap-md justify-end">
-          <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>
+          <Button variant="secondary" onClick={() => setDeleteConfirm(null)} aria-label="Cancel delete">
             Cancel
           </Button>
           <Button
             variant="destructive"
-            onClick={() => deleteConfirm && handleDelete(deleteConfirm)}
+            onClick={() => deleteConfirm && void handleDelete(deleteConfirm)}
+            aria-describedby="delete-confirm-desc"
           >
             Remove Provider
           </Button>

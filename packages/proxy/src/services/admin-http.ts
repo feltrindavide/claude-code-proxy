@@ -28,11 +28,12 @@ export function createAdminOnlyApp(): express.Application {
   return adminApp;
 }
 
-export function startAdminHttpServer(app: express.Application, port: number, host: string): Server | null {
+export function startAdminHttpServer(app: express.Application, port: number, host = '127.0.0.1'): Server | null {
+  const adminHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   if (adminHttpServer) return adminHttpServer;
 
-  adminHttpServer = app.listen(port, host, () => {
-    logger.info({ host, port }, 'Admin-only HTTP listener started');
+  adminHttpServer = app.listen(port, adminHost, () => {
+    logger.info({ host: adminHost, port }, 'Admin-only HTTP listener started');
   });
   return adminHttpServer;
 }

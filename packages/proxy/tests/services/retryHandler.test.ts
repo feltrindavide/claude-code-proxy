@@ -1,86 +1,130 @@
 /**
  * RetryHandler tests
- * Phase: 05-reliability-polish
- * Plan: 05-02
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { fetchWithRetry, isTransientError, AbortError } from '../../src/services/retryHandler.js';
+
+vi.mock('../../src/services/requestLog.js', () => ({
+  requestLogService: { enrichEntry: vi.fn(), enrichLastEntry: vi.fn() },
+}));
+
+vi.mock('../../src/services/circuit-breaker.js', () => ({
+  circuitBreakerService: {
+    canRequest: vi.fn(() => true),
+    recordSuccess: vi.fn(),
+    recordFailure: vi.fn(),
+    getState: vi.fn(() => 'closed'),
+  },
+}));
+
+vi.mock('../../src/metrics/prometheus.js', () => ({
+  recordCircuitState: vi.fn(),
+}));
+
+import { requestLogService } from '../../src/services/requestLog.js';
 
 describe('isTransientError', () => {
   it('returns true for TypeError (network error)', () => {
-    // TODO: Implement isTransientError — should classify TypeError as transient
     expect(isTransientError(new TypeError('network error'))).toBe(true);
   });
 
   it('returns true for ECONNRESET', () => {
-    // TODO: Implement — should detect ECONNRESET in error message
-    const error = new Error('read ECONNRESET');
-    expect(isTransientError(error)).toBe(true);
+    expect(isTransientError(new Error('read ECONNRESET'))).toBe(true);
   });
 
   it('returns true for ETIMEDOUT', () => {
-    // TODO: Implement — should detect ETIMEDOUT in error message
-    const error = new Error('connect ETIMEDOUT');
-    expect(isTransientError(error)).toBe(true);
+    expect(isTransientError(new Error('connect ETIMEDOUT'))).toBe(true);
   });
 
   it('returns false for AbortError', () => {
-    // TODO: Implement — AbortError should never be retried (D-67)
-    const abortError = new AbortError('client error');
-    expect(isTransientError(abortError)).toBe(false);
+    expect(isTransientError(new AbortError('client error'))).toBe(false);
   });
 
   it('returns false for non-Error objects', () => {
-    // TODO: Implement — non-Error objects should not be retried
     expect(isTransientError('string error')).toBe(false);
     expect(isTransientError(null)).toBe(false);
     expect(isTransientError(undefined)).toBe(false);
   });
 
   it('returns false for 4xx errors', () => {
-    // TODO: Implement — 4xx errors wrapped in AbortError should not be retried
-    const abortError = new AbortError('Provider returned 400');
-    expect(isTransientError(abortError)).toBe(false);
+    expect(isTransientError(new AbortError('Provider returned 400'))).toBe(false);
   });
 });
 
 describe('fetchWithRetry', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('retries on 5xx errors', async () => {
-    // TODO: Implement — should retry up to 2 times on 500/502/503 responses
-    // Mock fetch that fails twice then succeeds
-    // Verify fetch was called 3 times total
-    expect(true).toBe(true); // placeholder
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls < 3) {
+        return new Response('error', { status: 500 });
+      }
+      return new Response('ok', { status: 200 });
+    });
+
+    const response = await fetchWithRetry('test-provider', fn);
+    expect(response.status).toBe(200);
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it('does NOT retry on 4xx errors (AbortError)', async () => {
-    // TODO: Implement — 400/401/403/404 should return immediately without retry
-    // Mock fetch that returns 401
-    // Verify fetch was called only once
-    expect(true).toBe(true); // placeholder
+    const fn = vi.fn(async () => new Response('unauthorized', { status: 401 }));
+
+    await expect(fetchWithRetry('test-provider', fn)).rejects.toSatisfy(
+      (err: unknown) => err instanceof AbortError || (err instanceof Error && err.message.includes('401')),
+    );
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it('logs retryCount on retry', async () => {
-    // TODO: Implement — onFailedAttempt should call requestLogService.enrichLastEntry
-    // Verify enrichLastEntry was called with { retryCount: attemptNumber }
-    expect(true).toBe(true); // placeholder
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return new Response('error', { status: 502 });
+      return new Response('ok', { status: 200 });
+    });
+
+    await fetchWithRetry('test-provider', fn, { requestId: 'req-1' });
+    expect(requestLogService.enrichEntry).toHaveBeenCalledWith('req-1', { retryCount: 1 });
   });
 
   it('respects max 2 retries', async () => {
-    // TODO: Implement — should not retry more than 2 times (D-68)
-    // Mock fetch that always returns 500
-    // Verify fetch was called exactly 3 times (1 original + 2 retries)
-    // Verify final error is thrown
-    expect(true).toBe(true); // placeholder
+    const fn = vi.fn(async () => new Response('error', { status: 503 }));
+
+    await expect(fetchWithRetry('test-provider', fn)).rejects.toThrow();
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it('uses 1s then 2s backoff delays', async () => {
-    // TODO: Implement — minTimeout: 1000, factor: 2 (D-68)
-    // Verify first retry delay is ~1000ms, second is ~2000ms
-    expect(true).toBe(true); // placeholder
+    vi.useFakeTimers();
+    const delays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: TimerHandler, ms?: number, ...args: unknown[]) => {
+      if (typeof ms === 'number' && ms >= 1000) delays.push(ms);
+      return originalSetTimeout(fn, 0, ...args);
+    }) as typeof setTimeout);
+
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls < 3) return new Response('error', { status: 500 });
+      return new Response('ok', { status: 200 });
+    });
+
+    const promise = fetchWithRetry('test-provider', fn);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(delays).toContain(1000);
+    expect(delays).toContain(2000);
   });
 });

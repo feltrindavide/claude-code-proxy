@@ -1,9 +1,15 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-import { getProxyHttpBase } from '@/lib/proxyBase';
 
-interface Provider { name: string; models: string[]; enabled: boolean; }
-interface RouteEntry { claudeTier: string; providerName: string; targetModel: string; }
+import { useEffect, useState, useCallback } from 'react';
+import {
+  adminFetch,
+  fetchDiscoveryStatus,
+  saveRoutes,
+  startProxy,
+  stopProxy,
+} from '@/lib/api';
+import { DiscoveryStatusSchema, HealthResponseSchema, ProvidersArraySchema, RoutesResponseSchema } from '@/lib/schemas';
+import { getProxyHttpBase } from '@/lib/proxyBase';
 
 const TIERS = [
   { tier: 'opus', label: 'Opus', color: '#ff9f0a' },
@@ -11,49 +17,90 @@ const TIERS = [
   { tier: 'haiku', label: 'Hai', color: '#34c759' },
 ];
 
+interface RouteEntry { claudeTier: string; providerName: string; targetModel: string; }
+interface Provider { name: string; models: string[]; enabled: boolean; }
+
 function openUrl(url: string) {
-  const tauri = (window as any).__TAURI__;
+  const tauri = (window as { __TAURI__?: { shell?: { open: (u: string) => void } } }).__TAURI__;
   if (tauri?.shell?.open) tauri.shell.open(url);
   else window.open(url, '_blank');
 }
 
 export default function PopupPage() {
   const [status, setStatus] = useState<'running' | 'stopped' | 'loading'>('stopped');
-  const [health, setHealth] = useState<any>(null);
+  const [health, setHealth] = useState<{ port?: number } | null>(null);
   const [routes, setRoutes] = useState<RouteEntry[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [discoveredCount, setDiscoveredCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
-    const API = getProxyHttpBase();
     try {
-      const [h, r, p, d] = await Promise.all([
-        fetch(`${API}/health`).then(r => r.json()),
-        fetch(`${API}/admin/routes`).then(r => r.json()),
-        fetch(`${API}/admin/providers`).then(r => r.json()),
-        fetch(`${API}/admin/discovery`).then(r => r.json()).catch(() => ({ providers: [] })),
+      const healthRes = await fetch(`${getProxyHttpBase()}/health`, { signal: AbortSignal.timeout(3000) });
+      if (!healthRes.ok) throw new Error('Proxy not reachable');
+      const healthData = HealthResponseSchema.parse(await healthRes.json());
+
+      const [routesData, providersData, discoveryData] = await Promise.all([
+        adminFetch(`${getProxyHttpBase()}/admin/routes`, { signal: AbortSignal.timeout(5000) })
+          .then(async (r) => {
+            if (!r.ok) throw new Error('Failed to load routes');
+            return RoutesResponseSchema.parse(await r.json());
+          }),
+        adminFetch(`${getProxyHttpBase()}/admin/providers`, { signal: AbortSignal.timeout(5000) })
+          .then(async (r) => {
+            if (!r.ok) throw new Error('Failed to load providers');
+            return ProvidersArraySchema.parse(await r.json());
+          }),
+        fetchDiscoveryStatus().catch(() => DiscoveryStatusSchema.parse({ providers: [] })),
       ]);
-      setHealth(h); setStatus('running');
-      setRoutes(Array.isArray(r) ? r : (r.routes || [])); setProviders(p);
-      setDiscoveredCount(d.providers?.filter((pr: any) => pr.reachable)?.length || 0);
-    } catch { setStatus('stopped'); setHealth(null); }
+
+      setHealth(healthData);
+      setStatus('running');
+      setRoutes(routesData.routes);
+      setProviders(providersData);
+      setDiscoveredCount(discoveryData.providers.filter((p) => p.reachable).length);
+      setError(null);
+    } catch (err) {
+      setStatus('stopped');
+      setHealth(null);
+      setError(err instanceof Error ? err.message : 'Proxy offline');
+    }
   }, []);
 
-  useEffect(() => { refresh(); const i = setInterval(refresh, 5000); return () => clearInterval(i); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const interval = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(interval);
+  }, [refresh]);
 
   async function updateRoute(tier: string, field: 'providerName' | 'targetModel', value: string) {
-    const nr = routes.map(r => r.claudeTier === tier ? { ...r, [field]: value } : r);
-    if (!nr.find(r => r.claudeTier === tier)) nr.push({ claudeTier: tier, providerName: '', targetModel: '' });
+    const nr = routes.map((r) => (r.claudeTier === tier ? { ...r, [field]: value } : r));
+    if (!nr.find((r) => r.claudeTier === tier)) {
+      nr.push({ claudeTier: tier, providerName: '', targetModel: '' });
+    }
     try {
-      await fetch(`${getProxyHttpBase()}/admin/routes`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ routes: nr.filter(r => r.providerName && r.targetModel) }),
-      });
+      await saveRoutes(nr.filter((r) => r.providerName && r.targetModel));
       setRoutes(nr);
-    } catch {}
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save route');
+    }
   }
 
-  const getRoute = (t: string) => routes.find(r => r.claudeTier === t);
-  const getModels = (t: string) => providers.find(p => p.name === getRoute(t)?.providerName)?.models || [];
+  async function toggleProxy() {
+    setStatus('loading');
+    try {
+      if (status === 'running') await stopProxy();
+      else await startProxy();
+      setTimeout(() => void refresh(), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Proxy control failed');
+      setStatus('stopped');
+    }
+  }
+
+  const getRoute = (t: string) => routes.find((r) => r.claudeTier === t);
+  const getModels = (t: string) => providers.find((p) => p.name === getRoute(t)?.providerName)?.models || [];
 
   const statusLabel = status === 'running'
     ? `:${health?.port || '3456'}`
@@ -86,20 +133,20 @@ export default function PopupPage() {
         button { font-family: inherit; }
       `}</style>
 
-      {/* Header + proxy control */}
+      {error && (
+        <div role="alert" style={{ fontSize: 9, color: 'var(--color-semantic-error)', marginBottom: 4 }}>
+          {error}
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-        <div style={{ width: 16, height: 16, borderRadius: 3, background: '#f54e00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 9, color: 'white', flexShrink: 0 }}>C</div>
+        <div style={{ width: 16, height: 16, borderRadius: 3, background: '#f54e00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 9, color: 'white', flexShrink: 0 }} aria-hidden="true">C</div>
         <span style={{ fontSize: 11, fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>ClaudeCode Proxy</span>
-        <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--color-muted)', flexShrink: 0 }}>{statusLabel}</span>
-        <button onClick={async () => {
-          setStatus('loading');
-          const t = (window as any).__TAURI__;
-          try {
-            if (status === 'running' && t?.invoke) await t.invoke('stop_proxy');
-            else if (t?.invoke) await t.invoke('start_proxy');
-          } catch {}
-          setTimeout(refresh, 2000);
-        }}
+        <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--color-muted)', flexShrink: 0 }} aria-live="polite">{statusLabel}</span>
+        <button
+          type="button"
+          onClick={() => void toggleProxy()}
+          aria-label={status === 'running' ? 'Stop proxy' : 'Start proxy'}
           style={{ padding: '2px 8px', border: 'none', borderRadius: 4, fontSize: 9, fontWeight: 600, flexShrink: 0,
             cursor: 'pointer', background: status === 'running' ? 'rgba(207,45,86,0.12)' : 'var(--color-primary)',
             color: status === 'running' ? 'var(--color-semantic-error)' : 'var(--color-on-primary)' }}>
@@ -107,7 +154,6 @@ export default function PopupPage() {
         </button>
       </div>
 
-      {/* Model Mapping */}
       <div style={{ background: 'var(--color-hairline-soft)', borderRadius: 5, padding: '4px 6px', marginBottom: 4 }}>
         <div style={{ fontSize: 8, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 2 }}>Mapping</div>
         {TIERS.map((t, i) => {
@@ -121,15 +167,23 @@ export default function PopupPage() {
               columnGap: 3,
               marginBottom: i === TIERS.length - 1 ? 0 : 2,
             }}>
-              <div style={{ width: 6, height: 6, borderRadius: '50%', background: t.color }} />
+              <div style={{ width: 6, height: 6, borderRadius: '50%', background: t.color }} aria-hidden="true" />
               <span style={{ fontSize: 10, color: 'var(--color-muted)' }}>{t.label}</span>
-              <select value={route?.providerName || ''} onChange={e => updateRoute(t.tier, 'providerName', e.target.value)}>
+              <select
+                value={route?.providerName || ''}
+                onChange={(e) => void updateRoute(t.tier, 'providerName', e.target.value)}
+                aria-label={`${t.label} provider`}
+              >
                 <option value="">Prov</option>
-                {providers.filter(p => p.enabled).map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+                {providers.filter((p) => p.enabled).map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
-              <select value={route?.targetModel || ''} onChange={e => updateRoute(t.tier, 'targetModel', e.target.value)}>
+              <select
+                value={route?.targetModel || ''}
+                onChange={(e) => void updateRoute(t.tier, 'targetModel', e.target.value)}
+                aria-label={`${t.label} model`}
+              >
                 <option value="">Model</option>
-                {models.map(m => <option key={m} value={m}>{m}</option>)}
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </div>
           );
@@ -143,12 +197,14 @@ export default function PopupPage() {
       )}
 
       <div style={{ display: 'flex', gap: 5 }}>
-        <button onClick={() => openUrl('http://localhost:3457')}
+        <button type="button" onClick={() => openUrl('http://localhost:3457')}
+          aria-label="Open dashboard"
           style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Dashboard
         </button>
-        <button onClick={() => openUrl('http://localhost:3457/settings')}
+        <button type="button" onClick={() => openUrl('http://localhost:3457/settings')}
+          aria-label="Open settings"
           style={{ flex: 1, padding: '3px 0', border: '1px solid var(--color-hairline-strong)', borderRadius: 4, fontSize: 9, fontWeight: 500,
             cursor: 'pointer', background: 'var(--color-surface-card)', color: 'var(--color-ink)' }}>
           Settings

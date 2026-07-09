@@ -9,7 +9,8 @@
     "dev": "node --loader ts-node/esm src/index.ts",
     "test": "vitest",
     "test:run": "vitest --run",
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-claude-code/shared": "*",
@@ -18,7 +19,6 @@
     "tiktoken": "^1.0.22",
     "eventsource-parser": "^3.0.8",
     "express": "^5.2.1",
-    "http-proxy-middleware": "^3.0.5",
     "on-finished": "^2.4.1",
     "p-retry": "^8.0.0",
     "pino": "^9.6.0",

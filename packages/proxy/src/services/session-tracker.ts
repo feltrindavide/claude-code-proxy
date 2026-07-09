@@ -27,6 +27,8 @@ export interface SessionUsage {
 interface SessionStore {
   sessions: Record<string, SessionUsage>;
   lastActive: string | null;
+  /** LRU access order — most recent at end */
+  accessOrder: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -34,28 +36,59 @@ interface SessionStore {
 // ---------------------------------------------------------------------------
 
 const SESSIONS_FILE = join(homedir(), '.claude', 'claude-code-proxy', 'data', 'sessions.json');
+const MAX_SESSIONS = 50;
 
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
 
 let store: SessionStore = load();
+let writeChain: Promise<void> = Promise.resolve();
 
 function load(): SessionStore {
   try {
     if (existsSync(SESSIONS_FILE)) {
-      return JSON.parse(readFileSync(SESSIONS_FILE, 'utf-8')) as SessionStore;
+      const parsed = JSON.parse(readFileSync(SESSIONS_FILE, 'utf-8')) as SessionStore;
+      if (!parsed.accessOrder) {
+        parsed.accessOrder = Object.keys(parsed.sessions);
+      }
+      return parsed;
     }
   } catch {}
-  return { sessions: {}, lastActive: null };
+  return { sessions: {}, lastActive: null, accessOrder: [] };
 }
 
-function save(): void {
+function persistSync(): void {
   try {
     const dir = join(homedir(), '.claude', 'claude-code-proxy', 'data');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(SESSIONS_FILE, JSON.stringify(store, null, 2), { mode: 0o600 });
   } catch {}
+}
+
+function enqueuePersist(): void {
+  writeChain = writeChain.then(() => {
+    persistSync();
+  }).catch(() => {
+    persistSync();
+  });
+}
+
+function touchSession(key: string): void {
+  store.accessOrder = store.accessOrder.filter((k) => k !== key);
+  store.accessOrder.push(key);
+}
+
+function evictIfNeeded(): void {
+  while (store.accessOrder.length > MAX_SESSIONS) {
+    const oldest = store.accessOrder.shift();
+    if (oldest) {
+      delete store.sessions[oldest];
+      if (store.lastActive === oldest) {
+        store.lastActive = store.accessOrder[store.accessOrder.length - 1] ?? null;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -64,11 +97,6 @@ function save(): void {
 
 /**
  * Estrae il sessionId dal body della richiesta.
- * Claude Code invia metadata.user_id in vari formati:
- *   "utente_sessionId"          — formato semplice
- *   '{"session_id":"..."}'      — JSON string (Claude Desktop, Claude Code v2+)
- *   {"session_id":"..."}        — oggetto vero
- * Estrae sempre un identificativo leggero (no oggetti JSON come chiave).
  */
 export function extractSessionId(body: Record<string, unknown>): string | null {
   try {
@@ -76,9 +104,7 @@ export function extractSessionId(body: Record<string, unknown>): string | null {
     if (!metadata) return null;
     const userId = metadata.user_id;
 
-    // Caso 1: stringa
     if (typeof userId === 'string') {
-      // Se è un JSON string, parsalo
       if (userId.startsWith('{')) {
         try {
           const parsed = JSON.parse(userId);
@@ -87,18 +113,15 @@ export function extractSessionId(body: Record<string, unknown>): string | null {
         } catch {}
         return null;
       }
-      // Formato "utente_sessionId"
       const parts = userId.split('_session_');
       if (parts.length > 1) return parts[1];
       return userId;
     }
 
-    // Caso 2: oggetto JSON
     if (typeof userId === 'object' && userId !== null) {
       const obj = userId as Record<string, unknown>;
       const sid = obj.session_id as string | undefined;
       if (sid) return sid;
-      // Fallback: device_id breve
       const did = obj.device_id as string | undefined;
       if (did) return did.substring(0, 12);
     }
@@ -120,29 +143,23 @@ export function updateSessionUsage(
 
   store.sessions[key] = usage;
   store.lastActive = key;
+  touchSession(key);
+  evictIfNeeded();
 
-  // Limita a 50 sessioni per evitare memory leak
-  const keys = Object.keys(store.sessions);
-  if (keys.length > 50) {
-    const toRemove = keys.slice(0, keys.length - 50);
-    for (const k of toRemove) delete store.sessions[k];
-  }
-
-  save();
+  enqueuePersist();
 }
 
 /**
  * Restituisce l'utilizzo per una sessione specifica.
- * Se sessionId è esplicito ma non ha dati, ritorna null (non l'ultima attiva).
- * Se sessionId non è specificato, ritorna l'ultima attiva.
  */
 export function getSessionUsage(sessionId?: string | null): SessionUsage | null {
-  // Se è richiesta una sessione specifica, torna SOLO quella
   if (sessionId) {
-    return store.sessions[sessionId] || null;
+    const usage = store.sessions[sessionId] || null;
+    if (usage) touchSession(sessionId);
+    return usage;
   }
-  // Nessuna sessione specifica: torna l'ultima attiva
   if (store.lastActive && store.sessions[store.lastActive]) {
+    touchSession(store.lastActive);
     return store.sessions[store.lastActive];
   }
   return null;
@@ -153,4 +170,15 @@ export function getSessionUsage(sessionId?: string | null): SessionUsage | null 
  */
 export function getLastActiveSessionId(): string | null {
   return store.lastActive;
+}
+
+/** @internal test helper — wait for pending writes */
+export async function flushSessionWritesForTests(): Promise<void> {
+  await writeChain;
+}
+
+/** @internal test helper */
+export function resetSessionStoreForTests(): void {
+  store = { sessions: {}, lastActive: null, accessOrder: [] };
+  writeChain = Promise.resolve();
 }

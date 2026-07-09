@@ -37,6 +37,11 @@ export type ProxyEventMap = {
   'config.reloaded': {
     timestamp: string;
   };
+  'config.invalidate': Record<string, never>;
+  'circuit.open': {
+    provider: string;
+    timestamp: string;
+  };
 };
 
 export type ProxyEventType = keyof ProxyEventMap;

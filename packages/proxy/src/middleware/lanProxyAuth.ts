@@ -5,7 +5,7 @@
 
 import type { Request, Response, NextFunction } from 'express';
 import { configService } from '../services/config.js';
-import { resolveBindHost } from '../services/network.js';
+import { resolveBindHost, isLocalhostHost } from '../services/network.js';
 
 export function lanProxyAuthMiddleware(
   req: Request,
@@ -18,7 +18,7 @@ export function lanProxyAuthMiddleware(
 
   const cfg = configService.load();
   const bindHost = resolveBindHost(cfg.host);
-  const isLocalOnly = bindHost === '127.0.0.1' || bindHost === '::1' || bindHost === 'localhost';
+  const isLocalOnly = isLocalhostHost(bindHost);
 
   if (isLocalOnly) {
     return next();
@@ -26,7 +26,14 @@ export function lanProxyAuthMiddleware(
 
   const requiredToken = process.env.PROXY_API_TOKEN;
   if (!requiredToken) {
-    return next();
+    res.status(503).json({
+      type: 'error',
+      error: {
+        type: 'configuration_error',
+        message: 'LAN bind is enabled but PROXY_API_TOKEN is not configured',
+      },
+    });
+    return;
   }
 
   const auth = req.headers.authorization;

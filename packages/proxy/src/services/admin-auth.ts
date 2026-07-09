@@ -2,7 +2,7 @@
  * Admin API token — generated on first startup, stored on disk.
  */
 
-import { randomBytes } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -25,6 +25,13 @@ function ensureDataDir(): void {
   }
 }
 
+function safeEqualToken(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 /** Load or create the admin API token. */
 export function ensureAdminToken(): string {
   if (cachedToken) return cachedToken;
@@ -43,23 +50,23 @@ export function ensureAdminToken(): string {
   return cachedToken;
 }
 
-/** Validate admin token from request headers or ?token= query (SSE/WebSocket). */
+/** Validate admin token from request headers only (no query string). */
 export function validateAdminToken(req: Request): boolean {
   const expected = ensureAdminToken();
   const authHeader = req.headers.authorization;
   const headerToken = req.headers['x-admin-token'];
-  const queryToken = typeof req.query.token === 'string' ? req.query.token : null;
 
-  if (typeof headerToken === 'string' && headerToken === expected) return true;
-  if (authHeader?.startsWith('Bearer ') && authHeader.slice(7) === expected) return true;
-  if (queryToken && queryToken === expected) return true;
+  if (typeof headerToken === 'string' && safeEqualToken(headerToken, expected)) return true;
+  if (authHeader?.startsWith('Bearer ') && safeEqualToken(authHeader.slice(7), expected)) {
+    return true;
+  }
 
   return false;
 }
 
-/** Validate a raw token string (WebSocket auth). */
+/** Validate a raw token string (WebSocket auth message only). */
 export function validateAdminTokenFromString(token: string): boolean {
-  return token === ensureAdminToken();
+  return safeEqualToken(token, ensureAdminToken());
 }
 
 /** True when request originates from localhost. */

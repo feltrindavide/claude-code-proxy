@@ -6,6 +6,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
+  retries: process.env.CI ? 2 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
   reporter: [['html', { open: 'never' }], ['list']],

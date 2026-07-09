@@ -25,13 +25,7 @@ export function getMetricsSummary(): MetricsSummary {
   const requestCount = logs.length;
   const errorRate = requestCount > 0 ? errors / requestCount : 0;
 
-  const allLatency = latencyTracker.getAllStats();
-  const p50Values = allLatency.map((s) => s.p50).filter((v) => v > 0);
-  const p95Values = allLatency.map((s) => s.p95).filter((v) => v > 0);
-  const avgValues = allLatency.map((s) => s.avg).filter((v) => v > 0);
-
-  const avg = (arr: number[]) =>
-    arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+  const global = latencyTracker.getGlobalLatency();
 
   const circuitBreakers = [...circuitBreakerService.getAllStates()].map(([provider, state]) => ({
     provider,
@@ -47,9 +41,9 @@ export function getMetricsSummary(): MetricsSummary {
     errorRate: Math.round(errorRate * 1000) / 1000,
     requestCount,
     latency: {
-      p50: avg(p50Values),
-      p95: avg(p95Values),
-      avg: avg(avgValues),
+      p50: global.p50,
+      p95: global.p95,
+      avg: global.avg,
     },
     circuitBreakers,
   };

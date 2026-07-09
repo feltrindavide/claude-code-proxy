@@ -20,6 +20,7 @@ export function isTransientError(error: unknown): boolean {
 export async function fetchWithRetry(
   providerName: string,
   fn: (attemptNumber: number) => Promise<Response>,
+  options?: { requestId?: string },
 ): Promise<Response> {
   if (!circuitBreakerService.canRequest(providerName)) {
     throw new Error(`Provider ${providerName} circuit breaker is open`);
@@ -29,6 +30,10 @@ export async function fetchWithRetry(
     const response = await pRetry(
       async (attemptNumber) => {
         const response = await fn(attemptNumber);
+
+        if (response.status === 429) {
+          throw new Error(`Provider ${providerName} returned 429 (rate limited)`);
+        }
 
         if (response.status >= 400 && response.status < 500) {
           const errorText = await response.text().catch(() => '');
@@ -54,7 +59,9 @@ export async function fetchWithRetry(
               { provider: providerName, attempt: error.attemptNumber },
               'Retrying upstream request',
             );
-            requestLogService.enrichLastEntry({ retryCount: error.attemptNumber });
+            if (options?.requestId) {
+              requestLogService.enrichEntry(options.requestId, { retryCount: error.attemptNumber });
+            }
           }
         },
       },

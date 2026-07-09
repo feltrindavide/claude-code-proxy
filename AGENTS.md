@@ -25,7 +25,7 @@ Codex CLI ──POST /v1/messages──▶ Express Proxy (:3456)
 **Key packages:**
 - `packages/proxy/src/` — Core proxy: Express server, provider adapters (OpenRouter, OpenCode, Ollama, Gemini, DeepSeek, Anthropic, Custom), middleware, services (config, provider, context-registry, keychain, token-counter, session-tracker, sse-transformer, retryHandler)
 - `apps/web/src/` — Next.js 15 app router, Zustand stores, Tailwind CSS
-- `src-tauri/src/` — Rust Tauri 2 app (tray menu, proxy process management, launchctl env, pf firewall rules)
+- `src-tauri/src/` — Rust Tauri 2 app (tray menu, proxy child process lifecycle, optional autostart)
 - `packages/cli/` — CLI setup tool (Commander)
 
 **Data flow:** Every POST to `/v1/messages` → model name parsed → `ProviderService.resolveModelRoute()` for tier-based routing or `resolveCustomModel()` for exact/partial match → adapter transforms Anthropic body to provider format → `fetchWithRetry()` → adapter transforms SSE response back → token inflation adjustment → streamed to Codex. Session tracking persists to `~/.Codex/Codex-proxy/data/sessions.json`.

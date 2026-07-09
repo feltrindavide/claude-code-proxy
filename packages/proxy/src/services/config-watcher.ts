@@ -6,12 +6,39 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { reloadRuntimeConfig } from './runtime-config.js';
+import { getActiveRequestCount } from '../middleware/activeRequestGate.js';
 import { logger } from '../lib/logger.js';
 
 const CONFIG_FILE = path.join(os.homedir(), '.claude', 'claude-code-proxy', 'config.json');
 
 let watcher: fs.FSWatcher | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let reloadPending = false;
+
+function tryReload(): void {
+  if (getActiveRequestCount() > 0) {
+    reloadPending = true;
+    logger.info('Config change deferred — active proxy requests in flight');
+    return;
+  }
+
+  reloadPending = false;
+  if (!fs.existsSync(CONFIG_FILE)) return;
+  try {
+    reloadRuntimeConfig();
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Config hot-reload failed',
+    );
+  }
+}
+
+export function notifyRequestCompleted(): void {
+  if (reloadPending && getActiveRequestCount() === 0) {
+    tryReload();
+  }
+}
 
 export function startConfigWatcher(): void {
   if (watcher) return;
@@ -28,15 +55,7 @@ export function startConfigWatcher(): void {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        if (!fs.existsSync(CONFIG_FILE)) return;
-        try {
-          reloadRuntimeConfig();
-        } catch (err) {
-          logger.warn(
-            { err: err instanceof Error ? err.message : String(err) },
-            'Config hot-reload failed',
-          );
-        }
+        tryReload();
       }, 500);
     });
 
@@ -58,4 +77,5 @@ export function stopConfigWatcher(): void {
     watcher.close();
     watcher = null;
   }
+  reloadPending = false;
 }

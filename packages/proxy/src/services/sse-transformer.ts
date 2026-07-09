@@ -15,6 +15,7 @@
 
 import { createParser } from 'eventsource-parser';
 import type { EventSourceMessage } from 'eventsource-parser';
+import { estimateOutputTokens } from './token-counter.js';
 
 // ---------------------------------------------------------------------------
 // SSE event formatting
@@ -190,10 +191,6 @@ export class ContentBlockManager {
     return events;
   }
 }
-
-import { createParser } from 'eventsource-parser';
-import type { EventSourceMessage } from 'eventsource-parser';
-import { estimateOutputTokens } from './token-counter.js';
 
 // ---------------------------------------------------------------------------
 // SSEBuilder — generates correct Anthropic SSE event sequence

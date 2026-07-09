@@ -1,17 +1,18 @@
 import { getProxyHttpBase, setProxyHttpBaseFromPort } from './proxyBase';
 import type { RouteExperiment } from '@anthropic-claude-code/shared';
+import { z } from 'zod';
+import {
+  BootstrapTokenSchema,
+  DiscoveryStatusSchema,
+  HealthResponseSchema,
+  ProvidersArraySchema,
+  RoutesResponseSchema,
+  SuccessResponseSchema,
+  ValidationResultSchema,
+  type ApiProvider,
+} from './schemas';
 
 let cachedAdminToken: string | null = null;
-
-async function tryTauriAdminToken(): Promise<string | null> {
-  try {
-    const mod = await import('@tauri-apps/api/core');
-    const token = await mod.invoke<string>('get_admin_token');
-    return token || null;
-  } catch {
-    return null;
-  }
-}
 
 function formatApiError(body: { error?: unknown }): string {
   const err = body.error;
@@ -25,20 +26,15 @@ async function bootstrapAdminToken(): Promise<string> {
     signal: AbortSignal.timeout(3000),
   });
   if (!response.ok) throw new Error('Failed to bootstrap admin token');
-  const data = await response.json() as { token: string };
-  cachedAdminToken = data.token;
+  const data = await response.json() as unknown;
+  const parsed = BootstrapTokenSchema.safeParse(data);
+  if (!parsed.success) throw new Error('Invalid bootstrap token response');
+  cachedAdminToken = parsed.data.token;
   return cachedAdminToken;
 }
 
 export async function ensureAdminToken(): Promise<string> {
   if (cachedAdminToken) return cachedAdminToken;
-
-  const tauriToken = await tryTauriAdminToken();
-  if (tauriToken) {
-    cachedAdminToken = tauriToken;
-    return cachedAdminToken;
-  }
-
   return bootstrapAdminToken();
 }
 
@@ -46,7 +42,7 @@ export function clearAdminTokenCache(): void {
   cachedAdminToken = null;
 }
 
-async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = await ensureAdminToken();
   const headers = new Headers(init?.headers);
   headers.set('X-Admin-Token', token);
@@ -60,6 +56,24 @@ async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
   }
 
   return response;
+}
+
+async function adminJson<T extends z.ZodTypeAny>(
+  url: string,
+  schema: T,
+  init?: RequestInit,
+): Promise<z.output<T>> {
+  const response = await adminFetch(url, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(formatApiError(body));
+  }
+  const data: unknown = await response.json();
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    throw new Error(`Invalid API response: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 // Tauri invoke — lazy loaded only when running inside Tauri app
@@ -86,14 +100,19 @@ export async function checkHealth(): Promise<{
       return { running: false, status: 'error', port: null, version: null };
     }
     const data = await response.json();
-    setProxyHttpBaseFromPort(data.port);
+    const parsed = HealthResponseSchema.safeParse(data);
+    if (!parsed.success) {
+      return { running: false, status: 'error', port: null, version: null };
+    }
+    const health = parsed.data;
+    if (health.port) setProxyHttpBaseFromPort(health.port);
     return {
       running: true,
-      status: data.status || 'ok',
-      port: data.port || 3456,
-      version: data.version || null,
-      uptimeMs: data.uptimeMs ?? null,
-      activeStreams: data.activeStreams ?? null,
+      status: health.status || 'ok',
+      port: health.port || 3456,
+      version: health.version || null,
+      uptimeMs: health.uptimeMs ?? null,
+      activeStreams: health.activeStreams ?? null,
     };
   } catch {
     return { running: false, status: 'stopped', port: null, version: null };
@@ -137,22 +156,10 @@ export async function getProviderCount(): Promise<number> {
   }
 }
 
-export async function fetchProviders(): Promise<Array<{
-  name: string;
-  baseUrl: string;
-  keyId: string;
-  keyMask: string | null;
-  models: string[];
-  enabled: boolean;
-  priority: number;
-  providerType?: string;
-  autoDiscovered?: boolean;
-}>> {
-  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers`, {
+export async function fetchProviders(): Promise<ApiProvider[]> {
+  return adminJson(`${getProxyHttpBase()}/admin/providers`, ProvidersArraySchema, {
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) throw new Error('Failed to fetch providers');
-  return response.json();
 }
 
 export async function saveProvider(data: {
@@ -251,30 +258,36 @@ export async function deleteProvider(id: string): Promise<{ success: boolean }> 
 }
 
 export async function testProviderConnection(id: string): Promise<{ valid: boolean; error?: string }> {
-  const response = await adminFetch(`${getProxyHttpBase()}/admin/providers/${id}/validate`, {
-    method: 'POST',
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return { valid: false, error: body.error || 'Validation failed' };
-  }
-  return response.json();
+  return adminJson(
+    `${getProxyHttpBase()}/admin/providers/${id}/validate`,
+    ValidationResultSchema,
+    { method: 'POST', signal: AbortSignal.timeout(15000) },
+  );
 }
 
-export async function fetchRoutes(): Promise<{
-  routes: Array<{
-    claudeTier: 'opus' | 'sonnet' | 'haiku';
-    providerName: string;
-    targetModel: string;
-  }>;
-  subagentModel?: string;
-}> {
-  const response = await adminFetch(`${getProxyHttpBase()}/admin/routes`, {
+/** Dry-run validation — tests credentials without saving provider config. */
+export async function testProviderDry(data: {
+  name: string;
+  baseUrl: string;
+  apiKey?: string;
+  providerType: string;
+}): Promise<{ valid: boolean; error?: string }> {
+  return adminJson(
+    `${getProxyHttpBase()}/admin/providers/validate-dry`,
+    ValidationResultSchema,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      signal: AbortSignal.timeout(15000),
+    },
+  );
+}
+
+export async function fetchRoutes(): Promise<z.output<typeof RoutesResponseSchema>> {
+  return adminJson(`${getProxyHttpBase()}/admin/routes`, RoutesResponseSchema, {
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) throw new Error('Failed to fetch routes');
-  return response.json();
 }
 
 export async function saveRoutes(routes: Array<{
@@ -282,24 +295,27 @@ export async function saveRoutes(routes: Array<{
   providerName: string;
   targetModel: string;
 }>, subagentModel?: string): Promise<{ success: boolean }> {
-  const response = await adminFetch(`${getProxyHttpBase()}/admin/routes`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ routes, subagentModel }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(formatApiError(body));
-  }
-  return response.json();
+  return adminJson(
+    `${getProxyHttpBase()}/admin/routes`,
+    SuccessResponseSchema,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routes, subagentModel }),
+      signal: AbortSignal.timeout(10000),
+    },
+  );
 }
 
 export async function fetchConfig(): Promise<{
-  providers: Array<any>;
-  routes: Array<any>;
+  providers: ApiProvider[];
+  routes: Array<{
+    claudeTier: 'opus' | 'sonnet' | 'haiku';
+    providerName: string;
+    targetModel: string;
+  }>;
   routing?: { preferLowLatency?: boolean; preferLowCost?: boolean; tierFallback?: string[] };
-  experiments?: Array<any>;
+  experiments?: RouteExperiment[];
   activeProfile?: string;
   profiles?: Record<string, unknown>;
 }> {
@@ -622,11 +638,9 @@ export interface DiscoveryStatus {
 }
 
 export async function fetchDiscoveryStatus(): Promise<DiscoveryStatus> {
-  const response = await adminFetch(`${getProxyHttpBase()}/admin/discovery`, {
+  return adminJson(`${getProxyHttpBase()}/admin/discovery`, DiscoveryStatusSchema, {
     signal: AbortSignal.timeout(5000),
   });
-  if (!response.ok) throw new Error('Failed to fetch discovery status');
-  return response.json();
 }
 
 export async function scanDiscovery(): Promise<{ success: boolean; providers: DiscoveredProvider[] }> {

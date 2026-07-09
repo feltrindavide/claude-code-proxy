@@ -14,7 +14,7 @@ import {
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
-import type { AppConfig } from '../types/index.js';
+import type { AppConfig } from './config.js';
 
 const AUDIT_DIR = join(homedir(), '.claude', 'claude-code-proxy', 'config-audit');
 const AUDIT_LOG = join(AUDIT_DIR, 'audit.jsonl');

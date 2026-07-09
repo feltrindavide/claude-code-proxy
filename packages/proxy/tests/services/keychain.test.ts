@@ -66,11 +66,10 @@ describe('SecretStore', () => {
     expect(parsed.test.data).toBeDefined();
   });
 
-  it('migrates legacy XOR format to AES-GCM on load', async () => {
+  it('migrates legacy XOR format throws KeychainUnavailableError', async () => {
     const { writeFileSync, mkdirSync } = await import('fs');
     const { join } = await import('path');
 
-    // Write legacy XOR-encoded secret
     const plain = 'legacy-api-key';
     const buf = Buffer.from(plain, 'utf-8');
     const key = 'ccp-2024-local-proxy-key-do-not-share';
@@ -88,12 +87,7 @@ describe('SecretStore', () => {
     );
 
     vi.resetModules();
-    const { getKey } = await import('../../src/services/keychain.js');
-    const retrieved = await getKey('legacy');
-    expect(retrieved).toBe(plain);
-
-    const { readFileSync } = await import('fs');
-    const migrated = JSON.parse(readFileSync(join(dataDir, 'secrets.json'), 'utf-8'));
-    expect(migrated.legacy.v).toBe(2);
+    const { getKey, KeychainUnavailableError } = await import('../../src/services/keychain.js');
+    await expect(getKey('legacy')).rejects.toBeInstanceOf(KeychainUnavailableError);
   });
 });

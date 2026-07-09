@@ -74,6 +74,40 @@ export class ProviderValidatorService {
   }
 
   /**
+   * Validate provider credentials without persisting config (dry-run for UI test button).
+   */
+  async validateProviderInline(
+    providerType: string,
+    baseUrl: string,
+    apiKey?: string,
+  ): Promise<ValidationResult> {
+    const adapter = getAdapter(providerType);
+    if (!adapter) {
+      return {
+        valid: false,
+        error: `No adapter found for provider type: ${providerType}`,
+      };
+    }
+
+    const normalizedType = providerType.toLowerCase();
+    if (normalizedType === 'ollama') {
+      return adapter.validate(baseUrl, apiKey || '').catch(() => ({
+        valid: false,
+        error: 'Could not connect to Ollama server',
+      }));
+    }
+
+    if (!apiKey?.trim()) {
+      return {
+        valid: false,
+        error: 'API key is required for this provider type',
+      };
+    }
+
+    return adapter.validate(baseUrl, apiKey);
+  }
+
+  /**
    * Validate all registered providers
    * Logs warnings for failed validations but doesn't throw
    * Used during startup (per D-22)

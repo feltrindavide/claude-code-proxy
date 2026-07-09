@@ -20,6 +20,7 @@ interface ProviderCircuit {
   state: CircuitState;
   consecutiveFailures: number;
   openedAt: number | null;
+  halfOpenProbeInFlight: boolean;
 }
 
 export class CircuitBreakerService {
@@ -33,7 +34,7 @@ export class CircuitBreakerService {
   private getOrCreate(providerName: string): ProviderCircuit {
     let c = this.circuits.get(providerName);
     if (!c) {
-      c = { state: 'closed', consecutiveFailures: 0, openedAt: null };
+      c = { state: 'closed', consecutiveFailures: 0, openedAt: null, halfOpenProbeInFlight: false };
       this.circuits.set(providerName, c);
     }
     return c;
@@ -56,12 +57,15 @@ export class CircuitBreakerService {
     if (c.state === 'open') {
       if (c.openedAt && Date.now() - c.openedAt >= this.config.cooldownMs) {
         c.state = 'half-open';
+        c.halfOpenProbeInFlight = false;
         return true;
       }
       return false;
     }
 
-    // half-open: allow probe
+    // half-open: allow a single probe request
+    if (c.halfOpenProbeInFlight) return false;
+    c.halfOpenProbeInFlight = true;
     return true;
   }
 
@@ -78,10 +82,12 @@ export class CircuitBreakerService {
     c.consecutiveFailures = 0;
     c.state = 'closed';
     c.openedAt = null;
+    c.halfOpenProbeInFlight = false;
   }
 
   recordFailure(providerName: string): void {
     const c = this.getOrCreate(providerName);
+    c.halfOpenProbeInFlight = false;
     if (c.state === 'half-open') {
       this.transitionToOpen(providerName, c);
       c.consecutiveFailures = this.config.failureThreshold;

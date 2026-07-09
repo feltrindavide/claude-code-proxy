@@ -7,6 +7,11 @@
  */
 
 import type { LLMProvider, ModelRoute, RouteResolution, ClaudeTier } from '../types/index.js';
+import { logger } from '../lib/logger.js';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * ProviderService — manages provider registry and route resolution
@@ -33,7 +38,19 @@ export class ProviderService {
   }
 
   setRoutes(routes: ModelRoute[]): void {
-    this.routes = routes;
+    const seen = new Set<string>();
+    for (const route of routes) {
+      if (seen.has(route.claudeTier)) {
+        console.warn(
+          `[Provider] Duplicate route for tier "${route.claudeTier}" — using first match only`,
+        );
+        continue;
+      }
+      seen.add(route.claudeTier);
+    }
+    this.routes = routes.filter((r, i, arr) =>
+      arr.findIndex((x) => x.claudeTier === r.claudeTier) === i,
+    );
   }
 
   getRoutes(): ModelRoute[] {
@@ -96,19 +113,22 @@ export class ProviderService {
 
     let best: { provider: LLMProvider; mId: string; score: number } | null = null;
 
-    for (const provider of this.providers.values()) {
-      if (!provider.enabled) continue;
+    const sortedProviders = [...this.providers.values()]
+      .filter((p) => p.enabled)
+      .sort((a, b) => a.priority - b.priority);
+
+    for (const provider of sortedProviders) {
       for (const mId of provider.models) {
         const mLower = mId.toLowerCase();
         const lastSegment = (mLower.split('/').pop() ?? mLower).split(':')[0];
-        const matches =
+        const wordBoundary =
           lastSegment === lower ||
-          lastSegment.endsWith(lower) ||
+          new RegExp(`(?:^|[-_/])${escapeRegExp(lower)}(?:$|[-_/])`).test(lastSegment) ||
           mLower.endsWith(`/${lower}`) ||
           mLower.endsWith(`:${lower}`);
-        if (!matches) continue;
+        if (!wordBoundary) continue;
 
-        const score = mId.length;
+        const score = mId.length + (100 - provider.priority);
         if (!best || score > best.score) {
           best = { provider, mId, score };
         }

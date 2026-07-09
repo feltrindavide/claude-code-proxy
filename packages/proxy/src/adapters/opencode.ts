@@ -30,6 +30,7 @@ import {
   parseSSEStream,
   mapStopReason,
   getUserFacingErrorMessage,
+  formatSSEEvent,
 } from '../services/sse-transformer.js';
 import { ThinkTagParser, HeuristicToolParser, parseToolArguments } from '../services/response-parsers.js';
 import { buildProviderHeaders, type HeaderOptions } from './base-headers.js';
@@ -180,7 +181,11 @@ export class OpenCodeAdapter implements ProviderAdapter {
       deferredText = null;
     }
 
-    const result: Record<string, unknown> = { model: route.targetModel, messages, stream: true };
+    const result: Record<string, unknown> = {
+      model: route.targetModel,
+      messages,
+      stream: body.stream === true,
+    };
 
     if (body.system) {
       const systemText = typeof body.system === 'string'
@@ -231,6 +236,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
     // When true, content is pure answer text (no embedded <think> tags), so we
     // skip the ThinkTagParser fallback and avoid double-emission of reasoning.
     let hasStructuredReasoning = false;
+
+    const toolIndexByUpstream = new Map<number, number>();
 
     try {
       for await (const event of parseSSEStream(upstreamResponse.body)) {
@@ -308,9 +315,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
               for (const evt of sse.closeOpenToolBlock()) {
                 yield evt;
               }
-              // New tool call — emit content_block_start for tool_use
-              const toolIndex = sse.startToolBlock(tc.index);
-              yield this.formatSSEEvent('content_block_start', {
+              const upstreamIdx = tc.index ?? 0;
+              const toolIndex = sse.startToolBlock(upstreamIdx);
+              toolIndexByUpstream.set(upstreamIdx, toolIndex);
+              yield formatSSEEvent('content_block_start', {
                 type: 'content_block_start',
                 index: toolIndex,
                 content_block: {
@@ -323,8 +331,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
             }
             // Emit input_json_delta for arguments fragment
             if (tc.function?.arguments) {
-              const toolIndex = tc.index ?? 0;
-              yield this.formatSSEEvent('content_block_delta', {
+              const upstreamIdx = tc.index ?? 0;
+              const toolIndex = toolIndexByUpstream.get(upstreamIdx) ?? sse.startToolBlock(upstreamIdx);
+              yield formatSSEEvent('content_block_delta', {
                 type: 'content_block_delta',
                 index: toolIndex,
                 delta: {
@@ -434,16 +443,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   private emitError(message: string): string {
-    return this.formatSSEEvent('error', {
+    return formatSSEEvent('error', {
       type: 'error',
       error: { type: 'api_error', message },
     });
-  }
-
-  private formatSSEEvent(
-    eventType: string,
-    data: Record<string, unknown>,
-  ): string {
-    return `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
   }
 }

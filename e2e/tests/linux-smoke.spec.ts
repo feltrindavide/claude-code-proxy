@@ -1,7 +1,6 @@
 /**
  * @smoke @linux
  * Linux E2E smoke — verifies proxy health when running via systemd/headless script.
- * Run: npm run test:e2e:smoke -- e2e/linux-smoke.spec.ts
  */
 import { test, expect } from '@playwright/test';
 

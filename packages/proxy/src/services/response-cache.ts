@@ -77,6 +77,11 @@ export class ResponseCache {
       messages: body.messages,
       tools: body.tools,
       max_tokens: body.max_tokens,
+      temperature: body.temperature,
+      top_p: body.top_p,
+      top_k: body.top_k,
+      stop_sequences: body.stop_sequences,
+      tool_choice: body.tool_choice,
     };
     const system = normalizeSystem(body.system);
     if (system) relevant.system = system;

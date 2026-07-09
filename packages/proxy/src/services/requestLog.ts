@@ -7,42 +7,103 @@
  * Uses atomic write pattern (temp file + renameSync) matching ConfigService
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync, readdirSync } from 'fs';
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  unlinkSync,
+  readdirSync,
+} from 'fs';
 import { join } from 'path';
 import os from 'os';
-import { randomBytes } from 'crypto';
-import type { RequestLogEntry, ClaudeTier } from '../types/index.js';
+import {
+  randomBytes,
+  createCipheriv,
+  createDecipheriv,
+  scryptSync,
+} from 'crypto';
+import type { RequestLogEntry } from '../types/index.js';
 import { broadcastLogEntry } from './log-broadcast.js';
+import { configService } from './config.js';
 
-// Log directory and file paths
 const LOG_DIR = join(os.homedir(), '.claude', 'claude-code-proxy');
 const LOG_FILE = join(LOG_DIR, 'data', 'request-log.json');
 const REPLAY_DIR = join(LOG_DIR, 'data', 'replay');
 const MAX_ENTRIES = 50;
 const MAX_REPLAY_BODIES = 30;
-const BODY_TRUNCATE_LIMIT = 2048; // 2KB truncation limit per D-48
+const BODY_TRUNCATE_LIMIT = 2048;
 
-/**
- * RequestLogService — manages request log persistence with ring buffer
- *
- * load: reads existing entries from disk on startup
- * addEntry: appends entry, drops oldest when exceeding MAX_ENTRIES, persists
- * getAll: returns a copy of all entries
- * enrichLastEntry: merges data into the most recent entry (for post-route-resolution data)
- * persist: atomic write via temp file + renameSync
- */
+function replayEncryptionKey(): Buffer {
+  return scryptSync(LOG_DIR, 'ccp-replay-bodies-v1', 32);
+}
+
+function encryptReplayPayload(plaintext: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', replayEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({
+    v: 1,
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    data: encrypted.toString('base64'),
+  });
+}
+
+function decryptReplayPayload(raw: string): string {
+  const parsed = JSON.parse(raw) as { v: number; iv: string; tag: string; data: string };
+  if (parsed.v !== 1) throw new Error('Unsupported replay encryption version');
+  const decipher = createDecipheriv(
+    'aes-256-gcm',
+    replayEncryptionKey(),
+    Buffer.from(parsed.iv, 'base64'),
+  );
+  decipher.setAuthTag(Buffer.from(parsed.tag, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(parsed.data, 'base64')),
+    decipher.final(),
+  ]).toString('utf-8');
+}
+
+export function redactLogBody(body: unknown): unknown {
+  if (Array.isArray(body)) {
+    return body.map(redactLogBody);
+  }
+  if (body && typeof body === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+      if (key === 'messages' && Array.isArray(value)) {
+        out[key] = `[${value.length} messages redacted]`;
+      } else if (key === 'system') {
+        out[key] = '[system prompt redacted]';
+      } else if (key === 'tools') {
+        out[key] = Array.isArray(value)
+          ? `[${value.length} tools redacted]`
+          : '[tools redacted]';
+      } else if (key === 'metadata') {
+        out[key] = '[metadata redacted]';
+      } else if (key === 'tool_choice') {
+        out[key] = '[tool_choice redacted]';
+      } else {
+        out[key] = redactLogBody(value);
+      }
+    }
+    return out;
+  }
+  return body;
+}
+
 export class RequestLogService {
   private entries: RequestLogEntry[] = [];
   private logFile: string;
+  private pendingEnrichments = new Map<string, Partial<RequestLogEntry>>();
 
   constructor(logFile?: string) {
     this.logFile = logFile || LOG_FILE;
   }
 
-  /**
-   * Load existing log entries from disk
-   * Returns empty array if file doesn't exist (graceful first-run)
-   */
   load(): RequestLogEntry[] {
     try {
       if (!existsSync(this.logFile)) {
@@ -58,30 +119,23 @@ export class RequestLogService {
     }
   }
 
-  /**
-   * Add a new log entry and persist to disk
-   * Ring buffer: drops oldest entries when exceeding MAX_ENTRIES
-   */
-  addEntry(entry: RequestLogEntry): void {
-    this.entries.push(entry);
-    if (this.entries.length > MAX_ENTRIES) {
-      this.entries = this.entries.slice(-MAX_ENTRIES);
+  isReplayEnabled(): boolean {
+    const config = configService.load();
+    return config.replayBodies === true || process.env.PROXY_REPLAY_BODIES === 'true';
+  }
+
+  enrichEntry(requestId: string, update: Partial<RequestLogEntry>): void {
+    const existing = this.pendingEnrichments.get(requestId) || {};
+    this.pendingEnrichments.set(requestId, { ...existing, ...update });
+
+    const idx = this.entries.findIndex((e) => e.requestId === requestId);
+    if (idx >= 0) {
+      this.entries[idx] = { ...this.entries[idx], ...update };
+      this.persist();
     }
-    this.persist();
-    broadcastLogEntry(entry);
   }
 
-  /**
-   * Return a copy of all log entries (not a reference)
-   */
-  getAll(): RequestLogEntry[] {
-    return [...this.entries];
-  }
-
-  /**
-   * Enrich the most recent log entry with additional data
-   * Used by proxy handler to add claudeTier/providerName/targetModel after route resolution
-   */
+  /** @deprecated use enrichEntry(requestId, ...) */
   enrichLastEntry(update: Partial<RequestLogEntry>): void {
     if (this.entries.length > 0) {
       const lastIndex = this.entries.length - 1;
@@ -90,10 +144,25 @@ export class RequestLogService {
     }
   }
 
-  /**
-   * Truncate a request/response body to BODY_TRUNCATE_LIMIT chars
-   * Returns JSON-stringified body, truncated with '...' suffix if over limit
-   */
+  addEntry(entry: RequestLogEntry): void {
+    const requestId = entry.requestId;
+    if (requestId && this.pendingEnrichments.has(requestId)) {
+      entry = { ...entry, ...this.pendingEnrichments.get(requestId) };
+      this.pendingEnrichments.delete(requestId);
+    }
+
+    this.entries.push(entry);
+    if (this.entries.length > MAX_ENTRIES) {
+      this.entries = this.entries.slice(-MAX_ENTRIES);
+    }
+    this.persist();
+    broadcastLogEntry(entry);
+  }
+
+  getAll(): RequestLogEntry[] {
+    return [...this.entries];
+  }
+
   truncateBody(body: unknown): string {
     const redacted = redactLogBody(body);
     const serialized = JSON.stringify(redacted);
@@ -103,21 +172,32 @@ export class RequestLogService {
     return serialized;
   }
 
-  /** Store full request body for replay (ring buffer). */
-  storeReplayBody(body: unknown): string {
+  storeReplayBody(body: unknown): string | undefined {
+    if (!this.isReplayEnabled()) return undefined;
+
     if (!existsSync(REPLAY_DIR)) {
       mkdirSync(REPLAY_DIR, { recursive: true, mode: 0o700 });
     }
     const id = randomBytes(8).toString('hex');
-    writeFileSync(join(REPLAY_DIR, `${id}.json`), JSON.stringify(body), { mode: 0o600 });
+    const payload = encryptReplayPayload(JSON.stringify(body));
+    writeFileSync(join(REPLAY_DIR, `${id}.json`), payload, { mode: 0o600 });
     this.pruneReplayBodies();
     return id;
   }
 
   getReplayBody(replayId: string): unknown {
-    const path = join(REPLAY_DIR, `${replayId}.json`);
-    if (!existsSync(path)) throw new Error(`Replay body not found: ${replayId}`);
-    return JSON.parse(readFileSync(path, 'utf-8'));
+    const filePath = join(REPLAY_DIR, `${replayId}.json`);
+    if (!existsSync(filePath)) throw new Error(`Replay body not found: ${replayId}`);
+    const raw = readFileSync(filePath, 'utf-8');
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.v === 1) {
+        return JSON.parse(decryptReplayPayload(raw));
+      }
+    } catch {
+      // fall through — legacy plaintext replay files
+    }
+    return JSON.parse(raw);
   }
 
   private pruneReplayBodies(): void {
@@ -146,25 +226,13 @@ export class RequestLogService {
   }
 }
 
-function redactLogBody(body: unknown): unknown {
-  if (Array.isArray(body)) {
-    return body.map(redactLogBody);
-  }
-  if (body && typeof body === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-      if (key === 'messages' && Array.isArray(value)) {
-        out[key] = `[${value.length} messages redacted]`;
-      } else if (key === 'system') {
-        out[key] = '[system prompt redacted]';
-      } else {
-        out[key] = redactLogBody(value);
-      }
-    }
-    return out;
-  }
-  return body;
-}
-
-// Singleton instance
 export const requestLogService = new RequestLogService();
+
+export function redactLogEntry(entry: RequestLogEntry): RequestLogEntry {
+  return {
+    ...entry,
+    requestBodyPreview: entry.requestBodyPreview
+      ? String(entry.requestBodyPreview)
+      : entry.requestBodyPreview,
+  };
+}

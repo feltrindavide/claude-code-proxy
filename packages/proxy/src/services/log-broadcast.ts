@@ -6,16 +6,13 @@ import type { Server } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import type { RequestLogEntry } from '../types/index.js';
-import { requestLogService } from './requestLog.js';
+import { requestLogService, redactLogEntry } from './requestLog.js';
 import { validateAdminTokenFromString } from './admin-auth.js';
 
 let wss: WebSocketServer | null = null;
 const clients = new Set<WebSocket>();
 
 function parseToken(req: IncomingMessage): string | null {
-  const url = new URL(req.url || '/', 'http://localhost');
-  const q = url.searchParams.get('token');
-  if (q) return q;
   return null;
 }
 
@@ -41,13 +38,6 @@ export function attachLogWebSocket(server: Server): void {
 
   wss.on('connection', (ws, req) => {
     let authed = false;
-    const queryToken = parseToken(req);
-
-    if (queryToken && validateAdminTokenFromString(queryToken)) {
-      authed = true;
-      clients.add(ws);
-      send(ws, { type: 'snapshot', entries: requestLogService.getAll() });
-    }
 
     ws.on('message', (raw) => {
       if (authed) return;
@@ -56,7 +46,7 @@ export function attachLogWebSocket(server: Server): void {
         if (msg.type === 'auth' && msg.token && validateAdminTokenFromString(msg.token)) {
           authed = true;
           clients.add(ws);
-          send(ws, { type: 'snapshot', entries: requestLogService.getAll() });
+          send(ws, { type: 'snapshot', entries: requestLogService.getAll().map(redactLogEntry) });
         } else {
           send(ws, { type: 'error', message: 'Unauthorized' });
           ws.close(4401, 'Unauthorized');
@@ -94,7 +84,7 @@ export function _testClearClients(): void {
 }
 
 export function broadcastLogEntry(entry: RequestLogEntry): void {
-  const payload = JSON.stringify({ type: 'entry', entry });
+  const payload = JSON.stringify({ type: 'entry', entry: redactLogEntry(entry) });
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(payload);

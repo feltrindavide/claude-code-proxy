@@ -3,18 +3,22 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from './Sidebar';
-import { fetchOnboardingStatus, checkHealth } from '@/lib/api';
+import { fetchOnboardingStatus } from '@/lib/api';
 import { isRoute } from '@/lib/routes';
+import { useProxyStore } from '@/stores/proxyStore';
+import { useHealthStore } from '@/stores/healthStore';
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
+const HEALTH_POLL_MS = 5000;
+
 function OnboardingGate() {
   const pathname = usePathname();
   const router = useRouter();
   const [checking, setChecking] = useState(true);
-  const [proxyOffline, setProxyOffline] = useState(false);
+  const proxyStatus = useProxyStore((s) => s.status);
 
   useEffect(() => {
     if (isRoute(pathname, '/setup') || isRoute(pathname, '/popup')) {
@@ -25,23 +29,20 @@ function OnboardingGate() {
     void (async () => {
       setChecking(true);
       try {
-        const health = await checkHealth();
-        if (!health.running) {
-          setProxyOffline(true);
+        if (proxyStatus !== 'running') {
           return;
         }
-        setProxyOffline(false);
         const status = await fetchOnboardingStatus();
         if (!status.complete) {
           router.replace('/setup');
         }
       } catch {
-        setProxyOffline(true);
+        // proxy store handles offline state
       } finally {
         setChecking(false);
       }
     })();
-  }, [pathname, router]);
+  }, [pathname, router, proxyStatus]);
 
   if (checking && !isRoute(pathname, '/setup') && !isRoute(pathname, '/popup')) {
     return (
@@ -51,13 +52,33 @@ function OnboardingGate() {
     );
   }
 
-  if (proxyOffline && !isRoute(pathname, '/setup') && !isRoute(pathname, '/popup')) {
+  if (proxyStatus !== 'running' && !isRoute(pathname, '/setup') && !isRoute(pathname, '/popup')) {
     return (
-      <div className="bg-amber-500/10 border-b border-amber-500/30 px-lg py-sm text-sm text-amber-800 dark:text-amber-200">
+      <div className="bg-amber-500/10 border-b border-amber-500/30 px-lg py-sm text-sm text-amber-800 dark:text-amber-200" role="status">
         Proxy offline — start the proxy to complete setup or manage routes.
       </div>
     );
   }
+
+  return null;
+}
+
+function HealthPoller() {
+  const pathname = usePathname();
+  const checkHealth = useProxyStore((s) => s.checkHealth);
+  const pollValidation = useHealthStore((s) => s.pollValidation);
+
+  useEffect(() => {
+    if (isRoute(pathname, '/popup')) return;
+
+    void checkHealth();
+    void pollValidation();
+    const interval = setInterval(() => {
+      void checkHealth();
+      void pollValidation();
+    }, HEALTH_POLL_MS);
+    return () => clearInterval(interval);
+  }, [pathname, checkHealth, pollValidation]);
 
   return null;
 }
@@ -73,6 +94,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <>
+      <HealthPoller />
       <OnboardingGate />
       {isSetup ? (
         <main className="min-h-screen bg-canvas p-lg">{children}</main>
